@@ -2,6 +2,8 @@ package main
 
 import(
 	"log"
+	"time"
+	"vuln_scanner/internal/browser"
 	"vuln_scanner/internal/proxy"
 	"vuln_scanner/internal/utils"
 	"vuln_scanner/internal/core"
@@ -18,8 +20,7 @@ func main(){
 		}
 	}()
 	allowedTargets:= []string{
-		"testphp.vulnweb.com",
-		"juice-shop.herokuapp.com",
+		"*",
 	}
 
 	log.Println("Proxy----")
@@ -28,5 +29,14 @@ func main(){
 	}
 	log.Println("CA loaded successfully")
 	srv := proxy.NewProxyServer(proxyAddr, allowedTargets, trafficQueue)
-	srv.Start()
+	go func(){
+		srv.Start()
+	}()
+	time.Sleep(1*time.Second)
+
+	err := browser.OpenChrome("http://"+proxyAddr, "")
+	if err != nil {
+		log.Fatalf("Error: Failed to open Chrome: %v\n", err)
+	}
+	select{}
 }
