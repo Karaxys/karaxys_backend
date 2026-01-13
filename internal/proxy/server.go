@@ -4,26 +4,29 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"vuln_scanner/internal/core"
 	"github.com/elazarl/goproxy"
 )
 
 type ProxyServer struct {
 	Addr         string
 	AllowedHosts []string
-	Server       *goproxy.ProxyHttpServer
+	Server	   *goproxy.ProxyHttpServer
+	Queue        chan core.TrafficLog
 }
 
-func NewProxyServer(addr string, allowedHosts []string) *ProxyServer {
+func NewProxyServer(addr string, allowedHosts []string, queue chan core.TrafficLog) *ProxyServer {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 	proxy.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*$"))).HandleConnect(goproxy.AlwaysMitm)
-	proxy.OnRequest(RequestFilter(allowedHosts)).DoFunc(HandleRequest)
-	proxy.OnResponse(RequestFilter(allowedHosts)).DoFunc(HandleResponse)
+	proxy.OnRequest(RequestFilter(allowedHosts)).Do(HandleRequest(queue))
+	proxy.OnResponse(RequestFilter(allowedHosts)).Do(HandleResponse(queue))
 
 	return &ProxyServer{
 		Addr:         addr,
 		AllowedHosts: allowedHosts,
 		Server:       proxy,
+		Queue:		  queue,
 	}
 }
 

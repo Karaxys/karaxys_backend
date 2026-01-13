@@ -4,42 +4,58 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"vuln_scanner/internal/core"
 	"github.com/elazarl/goproxy"
 )
 
-func HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-	fmt.Printf("[INTERCEPTED REQUEST] %s %s\nHeaders: %#v\n", req.Method, req.URL.String(), req.Header)
+const MaxBodySize = 10 * 1024
 
-	if req.Body != nil {
-		bodyBytes, err := io.ReadAll(req.Body)
-		if err != nil {
-			fmt.Printf("Error reading request body: %v\n", err)
-			return req, nil
+func HandleRequest(queue chan<- core.TrafficLog) goproxy.ReqHandler{
+	return goproxy.FuncReqHandler(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response){
+		var bodyBytes []byte
+		if req.Body!=nil{
+			bodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, MaxBodySize))
+			req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
-		if len(bodyBytes) > 0 {
-			fmt.Printf("Request Body: %s\n", string(bodyBytes))
+
+		logData := core.TrafficLog{
+			Method:    req.Method,
+			URL:       req.URL.String(),
+			Host:      req.URL.Host,
+			Path:      req.URL.Path,
+			ReqHeaders: req.Header,
+			ReqBody:   string(bodyBytes),
 		}
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	}
-	return req, nil
+		ctx.UserData = logData
+		return req, nil
+	})
 }
 
-func HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-	if resp == nil {
+func HandleResponse(queue chan<- core.TrafficLog) goproxy.RespHandler{
+	return goproxy.FuncRespHandler(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response{
+		if resp == nil{
+			return nil
+		}
+
+		logData, ok := ctx.UserData.(core.TrafficLog)
+		if !ok{
+			return resp
+		}
+		var bodyBytes []byte
+		if resp.Body!=nil{
+			bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, MaxBodySize))
+			resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+
+		logData.RespStatus = resp.Status
+		logData.RespBody = string(bodyBytes)
+
+		select {
+		case queue <- logData:
+		default:
+			fmt.Println("Warning: Queue is full, dropping log")
+		}
+
 		return resp
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("Error reading response body: %v\n", err)
-		return resp
-	}
-	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	fmt.Printf("[INTERCEPTED RESPONSE] %s %s\nStatus: %s\nHeaders: %#v\n", ctx.Req.Method, ctx.Req.URL.String(), resp.Status, resp.Header)
-	if len(bodyBytes) > 0 {
-		fmt.Printf("Response Body: %s\n", string(bodyBytes))
-	}
-
-	return resp
+	})
 }
