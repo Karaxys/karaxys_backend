@@ -1,21 +1,27 @@
 package proxy
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"vuln_scanner/internal/core"
 	"github.com/elazarl/goproxy"
 )
 
-const MaxBodySize = 10 * 1024
+const MaxLogSize = 10 * 1024
+const MaxReadSize = 50 * 1024 * 1024
 
 func HandleRequest(queue chan<- core.TrafficLog) goproxy.ReqHandler{
 	return goproxy.FuncReqHandler(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response){
+		req.Header.Del("Accept-Encoding")
 		var bodyBytes []byte
 		if req.Body!=nil{
-			bodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, MaxBodySize))
+			bodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, MaxReadSize))
 			req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+		reqBodyStr := string(bodyBytes)
+		if len(reqBodyStr) > MaxLogSize {
+			reqBodyStr = reqBodyStr[:MaxLogSize] + "...[TRUNCATED]"
 		}
 
 		logData := core.TrafficLog{
@@ -24,7 +30,7 @@ func HandleRequest(queue chan<- core.TrafficLog) goproxy.ReqHandler{
 			Host:      req.URL.Host,
 			Path:      req.URL.Path,
 			ReqHeaders: req.Header,
-			ReqBody:   string(bodyBytes),
+			ReqBody:   reqBodyStr,
 		}
 		ctx.UserData = logData
 		return req, nil
@@ -43,12 +49,24 @@ func HandleResponse(queue chan<- core.TrafficLog) goproxy.RespHandler{
 		}
 		var bodyBytes []byte
 		if resp.Body!=nil{
-			bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, MaxBodySize))
-			resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, MaxReadSize))
+			resp.Body.Close()
 		}
+		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		resp.ContentLength = int64(len(bodyBytes))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
+		resp.Header.Del("Transfer-Encoding")
 
 		logData.RespStatus = resp.Status
-		logData.RespBody = string(bodyBytes)
+		if len(bodyBytes) > 0{
+			respBodyStr := string(bodyBytes)
+			if len(respBodyStr) > MaxLogSize{
+				respBodyStr = respBodyStr[:MaxLogSize] + "...[TRUNCATED]"
+			}
+			logData.RespBody = respBodyStr
+		} else {
+			logData.RespBody = "[Empty]"
+		}
 
 		select {
 		case queue <- logData:

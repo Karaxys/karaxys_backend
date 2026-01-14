@@ -7,16 +7,28 @@ import(
 	"vuln_scanner/internal/proxy"
 	"vuln_scanner/internal/utils"
 	"vuln_scanner/internal/core"
+	"vuln_scanner/internal/db"
+	"vuln_scanner/internal/config"
 )
 func main(){
-	proxyAddr := "127.0.0.1:8080"
-	certFile := "certs/ca.pem"
-	keyFile := "certs/ca.key"
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Error loading config: %v", err)
+	}
+
+	database, err := db.Connect(cfg.MongoURI, cfg.MongoDBName)
+	if err != nil {
+		log.Fatalf("Error connecting to DB: %v", err)
+	}
 
 	trafficQueue := make(chan core.TrafficLog, 1000)
 	go func(){
+		log.Println("Starting log processor...")
 		for logEntry := range trafficQueue{
-			log.Printf("Logged %s request to %s with response status %s and response length %d\n", logEntry.Method, logEntry.URL, logEntry.RespStatus, len(logEntry.RespBody))
+			err := database.SaveLog(logEntry)
+			if err == nil{
+				log.Printf("[DB] Saved log: %s %s\n", logEntry.Method, logEntry.URL)
+			}
 		}
 	}()
 	allowedTargets:= []string{
@@ -24,17 +36,17 @@ func main(){
 	}
 
 	log.Println("Proxy----")
-	if err := utils.SetupGoproxyCA(certFile, keyFile); err != nil{
+	if err := utils.SetupGoproxyCA(cfg.CertFile, cfg.KeyFile); err != nil{
 		log.Fatalf("Error: Failed to load CA certificates: %v\n", err)
 	}
 	log.Println("CA loaded successfully")
-	srv := proxy.NewProxyServer(proxyAddr, allowedTargets, trafficQueue)
+	srv := proxy.NewProxyServer(cfg.ProxyAddr, allowedTargets, trafficQueue)
 	go func(){
 		srv.Start()
 	}()
 	time.Sleep(1*time.Second)
 
-	err := browser.OpenChrome("http://"+proxyAddr, "")
+	err = browser.OpenChrome("http://"+cfg.ProxyAddr, "")
 	if err != nil {
 		log.Fatalf("Error: Failed to open Chrome: %v\n", err)
 	}

@@ -1,7 +1,12 @@
 package core
-import "net/http"
-
+import( 
+	"net/http"
+	"time"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
 type TrafficLog struct{
+	ID		primitive.ObjectID `bson:"_id,omitempty"`
+	CreatedAt  time.Time      `bson:"created_at"`
 	Method	  string	   `bson:"method"`
 	URL       string     `bson:"url"`
 	Host	  string     `bson:"host"`
@@ -11,5 +16,6 @@ type TrafficLog struct{
 	RespStatus string	 `bson:"resp_status"`
 	RespBody  string	 `bson:"resp_body"`
 	Analyzed   bool       `bson:"analyzed"`
+	IsScanned  bool       `bson:"is_scanned"`
 	Tags	   []string   `bson:"tags"`
 }
