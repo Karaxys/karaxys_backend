@@ -9,6 +9,7 @@ import(
 	"vuln_scanner/internal/core"
 	"vuln_scanner/internal/db"
 	"vuln_scanner/internal/config"
+	"vuln_scanner/internal/analyzer"
 )
 func main(){
 	cfg, err := config.LoadConfig()
@@ -20,14 +21,15 @@ func main(){
 	if err != nil {
 		log.Fatalf("Error connecting to DB: %v", err)
 	}
-
+	defer database.Disconnect()
+	processor := analyzer.NewProcessor(database.Client.Database(cfg.MongoDBName))
 	trafficQueue := make(chan core.TrafficLog, 1000)
 	go func(){
 		log.Println("Starting log processor...")
 		for logEntry := range trafficQueue{
 			err := database.SaveLog(logEntry)
 			if err == nil{
-				log.Printf("[DB] Saved log: %s %s\n", logEntry.Method, logEntry.URL)
+				processor.ProcessLog(logEntry)
 			}
 		}
 	}()

@@ -1,15 +1,31 @@
 package proxy
 import (
+	"fmt"
 	"bytes"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 	"vuln_scanner/internal/core"
 	"github.com/elazarl/goproxy"
 )
 
 const MaxLogSize = 10 * 1024
 const MaxReadSize = 50 * 1024 * 1024
+
+func sanitizeBody(data []byte) string{
+	if len(data) == 0{
+		return ""
+	}
+	if !utf8.Valid(data){
+		return "[BINARY DATA]"
+	}
+	if len(data) > MaxLogSize{
+		return string(data[:MaxLogSize]) + "...[TRUNCATED]"
+	}
+	return string(data)
+}
 
 func HandleRequest(queue chan<- core.TrafficLog) goproxy.ReqHandler{
 	return goproxy.FuncReqHandler(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response){
@@ -19,10 +35,7 @@ func HandleRequest(queue chan<- core.TrafficLog) goproxy.ReqHandler{
 			bodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, MaxReadSize))
 			req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
-		reqBodyStr := string(bodyBytes)
-		if len(reqBodyStr) > MaxLogSize {
-			reqBodyStr = reqBodyStr[:MaxLogSize] + "...[TRUNCATED]"
-		}
+		reqBodyStr := sanitizeBody(bodyBytes)
 
 		logData := core.TrafficLog{
 			Method:    req.Method,
@@ -47,25 +60,27 @@ func HandleResponse(queue chan<- core.TrafficLog) goproxy.RespHandler{
 		if !ok{
 			return resp
 		}
+
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		isBinaryType := strings.Contains(ct, "image") || strings.Contains(ct, "video") || strings.Contains(ct, "audio") || strings.Contains(ct, "application/octet-stream") || strings.Contains(ct, "font") || strings.Contains(ct, "pdf") || strings.Contains(ct, "zip") || strings.Contains(ct, "gzip")
 		var bodyBytes []byte
-		if resp.Body!=nil{
+		if !isBinaryType && resp.Body!=nil{
 			bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, MaxReadSize))
 			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
-		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		resp.ContentLength = int64(len(bodyBytes))
-		resp.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
-		resp.Header.Del("Transfer-Encoding")
+
+		if bodyBytes != nil{
+			resp.ContentLength = int64(len(bodyBytes))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
+			resp.Header.Del("Transfer-Encoding")
+		}
 
 		logData.RespStatus = resp.Status
-		if len(bodyBytes) > 0{
-			respBodyStr := string(bodyBytes)
-			if len(respBodyStr) > MaxLogSize{
-				respBodyStr = respBodyStr[:MaxLogSize] + "...[TRUNCATED]"
-			}
-			logData.RespBody = respBodyStr
-		} else {
-			logData.RespBody = "[Empty]"
+		if isBinaryType{
+			logData.RespBody = "[BINARY DATA: " + ct + "]"
+		}else{
+			logData.RespBody = sanitizeBody(bodyBytes)
 		}
 
 		select {
