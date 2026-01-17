@@ -4,8 +4,6 @@ import(
 	"sync"
 )
 
-const CardinalityThreshold = 5
-
 type Node struct {
 	Segment  string
 	Children map[string]*Node
@@ -26,15 +24,25 @@ func NewTrie() *Trie {
 	}
 }
 
+func getMergeThreshold(depth int) int{
+	if depth <= 1{
+		return 100
+	}
+	return 50
+}
+
 func (t *Trie) InsertPath(path string) string {
 	t.Lock.Lock()
 	defer t.Lock.Unlock()
 	path = strings.Trim(path, "/")
+	if path == ""{
+		return "/"
+	}
 	segments := strings.Split(path, "/")
 	current := t.Root
 	var patternParts []string
 
-	for _, segment := range segments {
+	for depth, segment := range segments {
 		if paramChild := t.findParamChild(current); paramChild != nil {
 			current = paramChild
 			patternParts = append(patternParts, paramChild.Segment)
@@ -61,7 +69,8 @@ func (t *Trie) InsertPath(path string) string {
 				Children: make(map[string]*Node),
 			}
 		}
-		if len(current.Children) >= CardinalityThreshold {
+		threshold := getMergeThreshold(depth)
+		if len(current.Children) >= threshold{
 			t.mergeChildrenToParam(current, "{param}")
 			current = current.Children["{param}"]
 			patternParts = append(patternParts, "{param}")

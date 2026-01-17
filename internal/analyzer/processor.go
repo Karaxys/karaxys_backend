@@ -38,9 +38,14 @@ func isStaticResource(path string) bool{
 	return false
 }
 
-func scanPII(key string, value string, foundTags *[]string){
+func scanPII(scope string, key string, value string, foundTags *[]string){
 	keyLower := strings.ToLower(key)
 	for _, rule := range pii.Rules{
+		if scope == "HEADER"{
+			if rule.Name == "ADDRESS" || rule.Name == "PHONE_NUMBER" || rule.Name == "PASSWORD"{
+				continue
+			}
+		}
 		if len(rule.Keywords) > 0 {
 			match := false
 			for _, kw := range rule.Keywords {
@@ -73,20 +78,20 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog){
 	if !isStaticResource(logEntry.Path) {
 		for k, vals := range logEntry.ReqHeaders{
 			for _, v := range vals{
-				scanPII(k, v, &detectedPII)
+				scanPII("HEADER", k, v, &detectedPII)
 			}
 		}
 
 		flatReq := utils.FlattenJSON(logEntry.ReqBody)
 		for k, v := range flatReq{
-			scanPII(k, v, &detectedPII)
+			scanPII("BODY", k, v, &detectedPII)
 		}
 		
 		flatResp := utils.FlattenJSON(logEntry.RespBody)
 		for k, v := range flatResp{
-			scanPII(k, v, &detectedPII)
+			scanPII("BODY", k, v, &detectedPII)
 		}
-		scanPII("url", logEntry.URL, &detectedPII)
+		scanPII("BODY","url", logEntry.URL, &detectedPII)
 	}
 
 	uniquePII := make(map[string]bool)

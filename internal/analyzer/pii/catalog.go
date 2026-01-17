@@ -1,6 +1,6 @@
 package pii
 
-import (
+import(
 	"regexp"
 )
 
@@ -11,14 +11,15 @@ type PIIRule struct {
 	Verifier func(string) bool
 }
 
-var (
+var(
 	regEmail        = regexp.MustCompile(`(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}`)
 	regPhone        = regexp.MustCompile(`(?:\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}`)
-	regDate         = regexp.MustCompile(`\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}`)
-	regVisa         = regexp.MustCompile(`^4[0-9]{12}(?:[0-9]{3})?$`)
-	regMasterCard   = regexp.MustCompile(`^5[1-5][0-9]{14}$`)
+	regDate         = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
+	regVisa         = regexp.MustCompile(`\b4[0-9]{12}(?:[0-9]{3})?\b`)
+	regMasterCard   = regexp.MustCompile(`\b5[1-5][0-9]{14}\b`)
+	regCardGeneric  = regexp.MustCompile(`\b\d{13,19}\b`)
 	regIBAN         = regexp.MustCompile(`[a-zA-Z]{2}[0-9]{2}[a-zA-Z0-9]{4}[0-9]{7}([a-zA-Z0-9]?){0,16}`)
-	regSWIFT        = regexp.MustCompile(`[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?`)
+	regSWIFT        = regexp.MustCompile(`\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b`)
 	regUUID         = regexp.MustCompile(`(?i)[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
 	regPAN          = regexp.MustCompile(`[A-Z]{5}[0-9]{4}[A-Z]{1}`)
 	regAadhar       = regexp.MustCompile(`^\d{4}\s\d{4}\s\d{4}$`)
@@ -28,23 +29,30 @@ var (
 	regCanadianSIN  = regexp.MustCompile(`\d{3}-\d{3}-\d{3}`)
 	regFinnishPIN   = regexp.MustCompile(`\d{6}[+-A]\d{3}[0-9A-Z]`)
 	regBearer       = regexp.MustCompile(`(?i)Bearer\s[a-zA-Z0-9\-\._~\+\/]+=*`)
+	regJWT          = regexp.MustCompile(`\beyJ[a-zA-Z0-9\-\._~\+\/]{20,}\b`)
 	regAWS          = regexp.MustCompile(`(?i)AKIA[0-9A-Z]{16}`)
 	regGenericString = regexp.MustCompile(`.{3,}`) 
-	regGenericInt    = regexp.MustCompile(`\d+`)
+	regGenericInt    = regexp.MustCompile(`\b\d+\b`)
 )
 
 var Rules = []PIIRule{
 	{
 		Name:     "VISA_CARD",
 		Regex:    regVisa,
-		Keywords: []string{"card", "cc", "visa", "payment"},
+		Keywords: []string{"cardNum","cardnum", "card_number", "card", "cc", "visa", "payment", "billing", "credit", "debit"},
 		Verifier: LuhnCheck,
 	},
 	{
 		Name:     "MASTER_CARD",
 		Regex:    regMasterCard,
-		Keywords: []string{"card", "cc", "master", "payment"},
+		Keywords: []string{"cardNum","cardnum", "card_number", "card", "cc", "master", "payment", "billing", "credit", "debit"},
 		Verifier: LuhnCheck,
+	},
+	{
+		Name:     "CREDIT_CARD",
+		Regex:    regCardGeneric,
+		Keywords: []string{"cardNum","cardnum", "card_number", "credit_card", "debit_card", "cc_num", "payment", "billing", "credit", "debit"},
+		Verifier: nil,
 	},
 	{
 		Name:     "IBAN_CODE",
@@ -95,9 +103,9 @@ var Rules = []PIIRule{
 		Verifier: LuhnCheck,
 	},
 	{
-		Name:     "US_ADDRESS",
-		Regex:    regexp.MustCompile(`\d+\s[A-z]+\s[A-z]+`),
-		Keywords: []string{"address", "street", "city", "zip", "billing", "shipping"},
+		Name:     "STREET_ADDRESS",
+		Regex:    regexp.MustCompile(`\b\d+\s[A-Z][a-z]+\s(St|Ave|Rd|Blvd|Lane|Drive|Way)\b`),
+		Keywords: []string{"address", "street", "city", "zip", "billing", "shipping", "residence", "location", "streetAddress", "StreetAddress", "street_address", "Street_Address", "zipCode", "zip_code", "zipcode", "ZipCode"},
 		Verifier: nil,
 	},
 	{
@@ -133,7 +141,7 @@ var Rules = []PIIRule{
 	{
 		Name:     "PHONE_NUMBER",
 		Regex:    regPhone,
-		Keywords: []string{"phone", "mobile", "contact", "fax", "tel"},
+		Keywords: []string{"phone", "mobile", "contact", "fax", "tel", "cell"},
 		Verifier: nil,
 	},
 	{
@@ -143,9 +151,15 @@ var Rules = []PIIRule{
 		Verifier: nil,
 	},
 	{
+		Name:     "PASSWORD",
+		Regex:    regGenericString,
+		Keywords: []string{"password", "passwd", "pwd", "secret", "pass"},
+		Verifier: nil,
+	},
+	{
 		Name:     "FULL_NAME",
 		Regex:    regexp.MustCompile(`[A-Z][a-z]+\s[A-Z][a-z]+`),
-		Keywords: []string{"name", "fullname", "customer", "user"},
+		Keywords: []string{"name", "fullname", "customer", "user", "answer", "fullName", "full_name", "Name"},
 		Verifier: nil,
 	},
 	{
@@ -155,9 +169,15 @@ var Rules = []PIIRule{
 		Verifier: nil,
 	},
 	{
+		Name:	 "JWT_TOKEN",
+		Regex:    regJWT,
+		Keywords: []string{"authentication", "token", "access_token", "access token", "refresh_token", "refresh token", "jwt", "id_token", "id token", "auth"},
+		Verifier: nil,
+	},
+	{
 		Name:     "AWS_KEY",
 		Regex:    regAWS,
-		Keywords: nil,
+		Keywords: []string{"aws", "amazon", "access_key", "access key", "secret_key","aws_access_key_id","aws_access_key","access_key","access_key_id","aws_key","aws_id"},
 		Verifier: nil,
 	},
 	{
@@ -169,7 +189,19 @@ var Rules = []PIIRule{
 	{
 		Name:     "USERNAME",
 		Regex:    regGenericString,
-		Keywords: []string{"username", "user_name", "login", "handle"},
+		Keywords: []string{"username", "user_name", "login", "handle", "userName"},
+		Verifier: nil,
+	},
+	{
+		Name:     "ADDRESS",
+		Regex:    regexp.MustCompile(`\b\d+\s[a-zA-Z]+\s[a-zA-Z]+`), 
+		Keywords: []string{"address", "street", "city", "zip", "billing", "shipping", "residence", "location", "streetAddress", "StreetAddress", "street_address", "Street_Address"},
+		Verifier: nil,
+	},
+	{
+		Name:     "PERSON_NAME",
+		Regex:    regexp.MustCompile(`[a-zA-Z\s]{3,}`),
+		Keywords: []string{"fullname", "full_name", "customer_name", "fullName", "name"},
 		Verifier: nil,
 	},
 }
