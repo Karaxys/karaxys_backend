@@ -1,6 +1,6 @@
 package analyzer
 
-import(
+import (
 	"context"
 	"log"
 	"strings"
@@ -9,18 +9,19 @@ import(
 	"vuln_scanner/internal/analyzer/pii"
 	"vuln_scanner/internal/analyzer/schema"
 	"vuln_scanner/internal/core"
+	"vuln_scanner/internal/utils"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type Engine struct{
+type Processor struct{
 	InventoryColl *mongo.Collection
 	ClusterTrie   *cluster.Trie
 }
 
-func NewProcessor(db *mongo.Database) *Engine{
-	return &Engine{
+func NewProcessor(db *mongo.Database) *Processor{
+	return &Processor{
 		InventoryColl: db.Collection("api_inventory"),
 		ClusterTrie:   cluster.NewTrie(),
 	}
@@ -37,38 +38,63 @@ func isStaticResource(path string) bool{
 	return false
 }
 
-func (e *Engine) ProcessLog(logEntry core.TrafficLog){
+func scanPII(key string, value string, foundTags *[]string){
+	keyLower := strings.ToLower(key)
+	for _, rule := range pii.Rules{
+		if len(rule.Keywords) > 0 {
+			match := false
+			for _, kw := range rule.Keywords {
+				if strings.Contains(keyLower, kw) {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		if rule.Regex.MatchString(value){
+			if rule.Verifier != nil{
+				matchStr := rule.Regex.FindString(value)
+				if rule.Verifier(matchStr){
+					*foundTags = append(*foundTags, rule.Name)
+				}
+			} else {
+				*foundTags = append(*foundTags, rule.Name)
+			}
+		}
+	}
+}
+
+func (e *Processor) ProcessLog(logEntry core.TrafficLog){
 	pathPattern := e.ClusterTrie.InsertPath(logEntry.Path)
 	reqSchema := schema.Learn(logEntry.ReqBody)
 	detectedPII := []string{}
 	if !isStaticResource(logEntry.Path) {
-		fullContent := logEntry.ReqBody + logEntry.RespBody + logEntry.URL
-		fullContentLower := strings.ToLower(fullContent)
-
-		for _, rule := range pii.Rules{
-			if len(rule.Keywords) > 0 {
-				foundKeyword := false
-				for _, kw := range rule.Keywords {
-					if strings.Contains(fullContentLower, kw) {
-						foundKeyword = true
-						break
-					}
-				}
-				if !foundKeyword {
-					continue
-				}
+		for k, vals := range logEntry.ReqHeaders{
+			for _, v := range vals{
+				scanPII(k, v, &detectedPII)
 			}
+		}
 
-			if rule.Regex.MatchString(fullContent){
-				if rule.Verifier != nil {
-					match := rule.Regex.FindString(fullContent)
-					if rule.Verifier(match) {
-						detectedPII = append(detectedPII, rule.Name)
-					}
-				} else {
-					detectedPII = append(detectedPII, rule.Name)
-				}
-			}
+		flatReq := utils.FlattenJSON(logEntry.ReqBody)
+		for k, v := range flatReq{
+			scanPII(k, v, &detectedPII)
+		}
+		
+		flatResp := utils.FlattenJSON(logEntry.RespBody)
+		for k, v := range flatResp{
+			scanPII(k, v, &detectedPII)
+		}
+		scanPII("url", logEntry.URL, &detectedPII)
+	}
+
+	uniquePII := make(map[string]bool)
+	finalPII := []string{}
+	for _,tag := range detectedPII{
+		if !uniquePII[tag]{
+			uniquePII[tag] = true
+			finalPII = append(finalPII, tag)
 		}
 	}
 
