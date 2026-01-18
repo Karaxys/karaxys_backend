@@ -72,7 +72,7 @@ func scanPII(scope string, key string, value string, foundTags *[]string){
 }
 
 func (e *Processor) ProcessLog(logEntry core.TrafficLog){
-	pathPattern := e.ClusterTrie.InsertPath(logEntry.Path)
+	pathPattern, params := e.ClusterTrie.InsertPath(logEntry.Path)
 	reqSchema := schema.Learn(logEntry.ReqBody)
 	detectedPII := []string{}
 	if !isStaticResource(logEntry.Path) {
@@ -120,8 +120,12 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog){
 			"schema_req":       reqSchema,
 		},
 		"$addToSet": bson.M{
-			"sensitive_data": bson.M{"$each": detectedPII},
+			"sensitive_data": bson.M{"$each": finalPII},
 		},
+	}
+
+	for paramKey, paramValue := range params{
+		update["$addToSet"].(bson.M)["param_values."+paramKey] = paramValue
 	}
 
 	for k, v := range logEntry.ReqHeaders{

@@ -31,21 +31,23 @@ func getMergeThreshold(depth int) int{
 	return 50
 }
 
-func (t *Trie) InsertPath(path string) string {
+func (t *Trie) InsertPath(path string) (string, map[string]string){
 	t.Lock.Lock()
 	defer t.Lock.Unlock()
 	path = strings.Trim(path, "/")
 	if path == ""{
-		return "/"
+		return "/", nil
 	}
 	segments := strings.Split(path, "/")
 	current := t.Root
 	var patternParts []string
+	params := make(map[string]string)
 
 	for depth, segment := range segments {
 		if paramChild := t.findParamChild(current); paramChild != nil {
 			current = paramChild
 			patternParts = append(patternParts, paramChild.Segment)
+			params[paramChild.Segment] = segment
 			continue
 		}
 
@@ -60,6 +62,7 @@ func (t *Trie) InsertPath(path string) string {
 			}
 			current = current.Children[varName]
 			patternParts = append(patternParts, varName)
+			params[varName] = segment
 			continue
 		}
 
@@ -74,6 +77,7 @@ func (t *Trie) InsertPath(path string) string {
 			t.mergeChildrenToParam(current, "{param}")
 			current = current.Children["{param}"]
 			patternParts = append(patternParts, "{param}")
+			params["{param}"] = segment
 		} else{
 			current = current.Children[segment]
 			patternParts = append(patternParts, segment)
@@ -81,7 +85,7 @@ func (t *Trie) InsertPath(path string) string {
 	}
 
 	current.IsEndpoint = true
-	return "/" + strings.Join(patternParts, "/")
+	return "/" + strings.Join(patternParts, "/"), params
 }
 
 func (t *Trie) findParamChild(n *Node) *Node{
