@@ -3,13 +3,13 @@ package main
 import(
 	"log"
 	"time"
-	"vuln_scanner/internal/browser"
-	"vuln_scanner/internal/proxy"
-	"vuln_scanner/internal/utils"
-	"vuln_scanner/internal/core"
-	"vuln_scanner/internal/db"
-	"vuln_scanner/internal/config"
-	"vuln_scanner/internal/analyzer"
+	"karaxys_backend/internal/browser"
+	"karaxys_backend/internal/proxy"
+	"karaxys_backend/internal/utils"
+	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/db"
+	"karaxys_backend/internal/config"
+	"karaxys_backend/internal/analyzer"
 )
 func main(){
 	cfg, err := config.LoadConfig()

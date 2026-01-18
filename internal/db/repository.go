@@ -3,7 +3,7 @@ import(
 	"context"
 	"log"
 	"time"
-	"vuln_scanner/internal/core"
+	"karaxys_backend/internal/core"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 

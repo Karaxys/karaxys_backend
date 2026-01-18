@@ -1,5 +1,5 @@
 package proxy
-import (
+import(
 	"fmt"
 	"bytes"
 	"io"
@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-	"vuln_scanner/internal/core"
+	"karaxys_backend/internal/core"
 	"github.com/elazarl/goproxy"
 )
 

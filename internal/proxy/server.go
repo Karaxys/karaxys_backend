@@ -1,10 +1,10 @@
 package proxy
-import (
+import(
 	"fmt"
 	"log"
 	"net/http"
 	"regexp"
-	"vuln_scanner/internal/core"
+	"karaxys_backend/internal/core"
 	"github.com/elazarl/goproxy"
 )
 

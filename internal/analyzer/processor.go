@@ -1,15 +1,15 @@
 package analyzer
 
-import (
+import(
 	"context"
 	"log"
 	"strings"
 	"time"
-	"vuln_scanner/internal/analyzer/cluster"
-	"vuln_scanner/internal/analyzer/pii"
-	"vuln_scanner/internal/analyzer/schema"
-	"vuln_scanner/internal/core"
-	"vuln_scanner/internal/utils"
+	"karaxys_backend/internal/analyzer/cluster"
+	"karaxys_backend/internal/analyzer/pii"
+	"karaxys_backend/internal/analyzer/schema"
+	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/utils"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"

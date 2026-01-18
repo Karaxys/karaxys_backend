@@ -1,6 +1,6 @@
 package utils
 
-import (
+import(
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -20,8 +20,6 @@ func SetupGoproxyCA(certpath, keypath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load keypair: %w", err)
 	}
-
-	// Keep the leaf parsed so goproxy can reuse it in the TLS config it builds.
 	if cert.Leaf == nil {
 		x509Cert, parseErr := x509.ParseCertificate(cert.Certificate[0])
 		if parseErr != nil {

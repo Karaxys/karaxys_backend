@@ -1,4 +1,4 @@
-module vuln_scanner
+module karaxys_backend
 
 go 1.24.11
 
