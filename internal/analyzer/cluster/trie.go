@@ -44,14 +44,15 @@ func (t *Trie) InsertPath(path string) (string, map[string]string){
 	params := make(map[string]string)
 
 	for depth, segment := range segments {
-		if paramChild := t.findParamChild(current); paramChild != nil {
+		isVar, varName := ClassifySegment(segment)
+		paramChild := t.findParamChild(current)
+		if paramChild != nil && isVar{
 			current = paramChild
 			patternParts = append(patternParts, paramChild.Segment)
 			params[paramChild.Segment] = segment
 			continue
 		}
 
-		isVar, varName := ClassifySegment(segment)
 		if isVar {
 			if _, exists := current.Children[varName]; !exists {
 				current.Children[varName] = &Node{
