@@ -35,3 +35,6 @@ certs/
 *.pem
 *.crt
 *.cer
+
+# Temporary files
+tmp/

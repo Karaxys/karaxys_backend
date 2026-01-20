@@ -1,12 +1,19 @@
 id: bola-auth-swap
 info:
-  name: BOLA - Authorization Token Swap
+  name: BOLA by Changing Auth Token
   author: karaxys
   severity: high
   description: The Scanner attempts to modify settings of a victim's organization using an attacker's token. A successful finding means the server responded with a success status code (2xx) and did NOT return common authorization error messages. This indicates a Broken Object Level Authorization (BOLA)
   tags: api, bola, authorization, OWASP
   reference:
     - "https://github.com/OWASP/API-Security/blob/master/editions/2023/en/0xa1-broken-object-level-authorization.md"
+  classification:
+    cwe-id:
+      - CWE-284
+      - CWE-285
+      - CWE-639
+    cve-id:
+      - CVE-2023-39349
 
 requests:
   - raw:
@@ -22,31 +29,28 @@ requests:
 
     matchers-condition: or
     matchers:
-      # 1. Vulnerability Match
-      - type: status
+      - type: dsl
         name: vulnerable
-        status:
-          - 200
-          - 201
-          - 204
-      # 2. Security Match
+        dsl:
+          - 'status_code >= 200 && status_code < 300' 
+          - '!contains_any(body, "Unauthorized", "Forbidden", "Access Denied", "error", "invalid token")'
+          - 'len(body) > 5'
+
       - type: status
         name: secure
         status:
           - 401
           - 403
-      # 3. Error Match
+          
       - type: status
         name: error
         status:
           - 400
           - 404
-          - 405
-          - 422
+          - 415
           - 500
           - 502
-          - 503
-      # 4. Catch-All for Debugging
+
       - type: dsl
         name: debug_unknown
         dsl:

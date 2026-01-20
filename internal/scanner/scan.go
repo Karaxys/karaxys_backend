@@ -6,6 +6,7 @@ import(
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,11 +28,16 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	if err != nil{
 		return nil, fmt.Errorf("failed to get template: %v", err)
 	}
-	tmpFile, err := os.CreateTemp("", "scan-*.yaml")
+
+	if err := os.MkdirAll("tmp", 0755); err != nil{
+		return nil, fmt.Errorf("failed to create tmp directory: %v", err)
+	}
+	tmpFile, err := os.CreateTemp("tmp", "scan-*.yaml")
 	if err != nil{
 		return nil, fmt.Errorf("failed to create temp template: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	absPath, _ := filepath.Abs(tmpFile.Name())
+	defer os.Remove(absPath)
 
 	if _, err := tmpFile.WriteString(yamlContent); err != nil{
 		return nil, err
@@ -90,7 +96,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	execTarget = strings.Replace(execTarget, "localhost", "127.0.0.1", 1)
 	err = ne.ExecuteNucleiWithOpts([]string{execTarget},
 		nuclei.WithTemplatesOrWorkflows(nuclei.TemplateSources{
-			Templates: []string{tmpFile.Name()},
+			Templates: []string{absPath},
 		}),
 		nuclei.WithVars(vars),
 	)
