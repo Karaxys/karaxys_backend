@@ -5,6 +5,7 @@ import(
 	"log"
 	"strings"
 	"time"
+	"net/url"
 	"karaxys_backend/internal/analyzer/cluster"
 	"karaxys_backend/internal/analyzer/pii"
 	"karaxys_backend/internal/analyzer/schema"
@@ -36,6 +37,14 @@ func isStaticResource(path string) bool{
 		}
 	}
 	return false
+}
+
+func getBaseURL(fullURL string) string{
+	u, err := url.Parse(fullURL)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func scanPII(scope string, key string, value string, foundTags *[]string){
@@ -74,6 +83,7 @@ func scanPII(scope string, key string, value string, foundTags *[]string){
 func (e *Processor) ProcessLog(logEntry core.TrafficLog){
 	pathPattern, params := e.ClusterTrie.InsertPath(logEntry.Path)
 	reqSchema := schema.Learn(logEntry.ReqBody)
+	baseURL := getBaseURL(logEntry.URL)
 	detectedPII := []string{}
 	if !isStaticResource(logEntry.Path) {
 		for k, vals := range logEntry.ReqHeaders{
@@ -106,12 +116,14 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog){
 	filter := bson.M{
 		"method":       logEntry.Method,
 		"path_pattern": pathPattern,
+		"base_url":     baseURL,
 	}
 
 	update := bson.M{
 		"$setOnInsert": bson.M{
 			"created_at":    time.Now(),
 			"original_path": logEntry.Path,
+			"base_url":     baseURL,
 		},
 		"$set": bson.M{
 			"updated_at":       time.Now(),

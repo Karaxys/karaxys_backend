@@ -4,26 +4,46 @@ import(
 	"karaxys_backend/internal/core"
 )
 
-func BuildBOLAConfig(targetBaseURL string, inventory *core.ApiInventory, manualToken string) (ScanConfig, error) {	
-	attackerToken := ""
-	if manualToken != "" {
-		attackerToken = manualToken
-	} else {
-		authHeaders := inventory.SampleHeaders["Authorization"]
-		if len(authHeaders) >= 2 {
-			attackerToken = authHeaders[1] 
+func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManualToken string, reqMethod string, testType string) (ScanConfig, error) {
+	tokenToUse := ""
+	switch testType{
+	case "BOLA":
+		if reqManualToken != "" {
+			tokenToUse = reqManualToken
+		} else if len(inventory.SampleHeaders["Authorization"]) >= 2{
+			tokenToUse = inventory.SampleHeaders["Authorization"][1]
+		}
+		
+		if tokenToUse == "" {
+			return ScanConfig{}, fmt.Errorf("BOLA requires an Attacker Token. Provide one in request or capture a second user.")
+		}
+
+	default:
+		if reqManualToken != "" {
+			tokenToUse = reqManualToken
+		} else if len(inventory.SampleHeaders["Authorization"]) > 0 {
+			tokenToUse = inventory.SampleHeaders["Authorization"][0]
 		}
 	}
-	if attackerToken == "" {
-		return ScanConfig{}, fmt.Errorf("cannot run BOLA: No attacker token found. Please provide one manually or browse with a second user")
+
+	methodToUse := inventory.Method
+	if testType == "BFLA" && reqMethod != "" {
+		methodToUse = reqMethod
+	}
+
+	flatHeaders := make(map[string]string)
+	for k, v := range inventory.SampleHeaders {
+		if len(v) > 0 { flatHeaders[k] = v[0] }
 	}
 
 	return ScanConfig{
-		TargetURL:  targetBaseURL,
-		Method:     inventory.Method,
-		Path:       inventory.OriginalPath,
-		Body:       inventory.SampleReqBody,
-		TestType:   "BOLA",
-		ManualAuth: attackerToken,
+		TargetURL:    targetBaseURL,
+		Method:       inventory.Method,
+		Path:         inventory.OriginalPath,
+		Body:         inventory.SampleReqBody,
+		Headers:      flatHeaders,
+		TestType:     testType,
+		ManualAuth:   tokenToUse,
+		AttackMethod: methodToUse,
 	}, nil
 }

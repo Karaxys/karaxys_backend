@@ -22,6 +22,7 @@ type TrafficLog struct{
 type ApiInventory struct {
 	ID             primitive.ObjectID  `bson:"_id,omitempty"`
 	Method         string              `bson:"method"`
+	BaseURL        string              `bson:"base_url"`
 	PathPattern    string              `bson:"path_pattern"`
 	OriginalPath   string              `bson:"original_path"`	
 	SensitiveData  []string            `bson:"sensitive_data"`

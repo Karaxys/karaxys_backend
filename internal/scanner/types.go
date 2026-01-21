@@ -10,7 +10,8 @@ type ScanConfig struct{
 	Body          string
 	Headers       map[string]string
 	TestType      string
-	ManualAuth    string 
+	ManualAuth    string
+	AttackMethod  string
 }
 
 type ScanResult struct {

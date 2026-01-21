@@ -1,16 +1,15 @@
 package main
 
 import(
+	"karaxys_backend/internal/api"
 	"karaxys_backend/internal/analyzer"
 	"karaxys_backend/internal/browser"
 	"karaxys_backend/internal/config"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/proxy"
-	"karaxys_backend/internal/scanner"
 	"karaxys_backend/internal/utils"
 	"log"
-	"strings"
 	"time"
 )
 func main(){
@@ -25,7 +24,10 @@ func main(){
 	}
 	defer database.Disconnect()
 	processor := analyzer.NewProcessor(database.Client.Database(cfg.MongoDBName))
-	vulnScanner := scanner.NewScanner()
+	apiServer := api.NewServer(database.Client.Database(cfg.MongoDBName))
+	go func() {
+		apiServer.Start()
+	}()
 	trafficQueue := make(chan core.TrafficLog, 1000)
 	go func(){
 		log.Println("Starting log processor...")
@@ -33,41 +35,6 @@ func main(){
 			err := database.SaveLog(logEntry)
 			if err == nil{
 				processor.ProcessLog(logEntry)
-			}
-			if (logEntry.Method == "PATCH" || logEntry.Method == "PUT") &&
-				strings.Contains(logEntry.Path, "/rest/products/reviews"){
-				log.Println("INTERCEPTED TARGET REQUEST! Triggering BOLA Scan...")
-				attackerToken := "Bearer eyJ0eX....."
-				scanCfg := scanner.ScanConfig{
-					TargetURL:  "http://" + logEntry.Host, // e.g. http://localhost:3000
-					Method:     logEntry.Method,
-					Path:       logEntry.Path,    // e.g. /rest/products/reviews/5
-					Body:       logEntry.ReqBody, // The original body (User A's update)
-					TestType:   "BOLA",
-					ManualAuth: attackerToken, // We inject User B's token
-				}
-
-				// Run the scan in a separate goroutine so we don't block the proxy
-				go func(cfg scanner.ScanConfig) {
-					results, err := vulnScanner.ExecuteScan(cfg)
-					if err != nil {
-						log.Printf("Scan Failed: %v", err)
-						return
-					}
-
-					// Print Results
-					if len(results) > 0 {
-						for _, r := range results {
-							if r.Vulnerable {
-								log.Printf("\n VULNERABILITY CONFIRMED \nType: %s\nProof: %s\n", r.TestType, r.Description)
-							} else {
-								log.Printf("\n Scan Completed (Secure/Error): %s\n", r.Description)
-							}
-						}
-					} else {
-						log.Println("Scan Finished. No matches (Check template config).")
-					}
-				}(scanCfg)
 			}
 		}
 	}()
