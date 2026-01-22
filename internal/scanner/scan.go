@@ -62,16 +62,20 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		defer mu.Unlock()
 		// DEBUG: Dump the full event
 		eventBytes, _ := json.MarshalIndent(event, "", "  ")
-		log.Printf("🔎 Nuclei Raw Event:\n%s", string(eventBytes))
+		log.Printf("Nuclei Raw Event:\n%s", string(eventBytes))
 		isVuln := event.MatcherName == "vulnerable"
 		severity := event.Info.SeverityHolder.Severity.String()
+		actualMethod := config.Method
+		if config.AttackMethod != "" {
+			actualMethod = config.AttackMethod
+		}
 
 		res := ScanResult{
 			TestType:    config.TestType,
 			Vulnerable:  isVuln,
 			Severity:    severity,
-			Description: fmt.Sprintf("BOLA Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName),
-			Proof:       fmt.Sprintf("curl -X %s %s%s -H 'Authorization: %s'", config.Method, config.TargetURL, config.Path, config.ManualAuth),
+			Description: fmt.Sprintf("Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName),
+			Proof:       fmt.Sprintf("curl -v -X %s %s%s -H 'Authorization: %s'", actualMethod, config.TargetURL, config.Path, config.ManualAuth),
 			Timestamp:   time.Now(),
 		}
 		results = append(results, res)
@@ -91,6 +95,19 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	vars = append(vars, fmt.Sprintf("body=%s", config.Body))
 	vars = append(vars, fmt.Sprintf("body_len=%d", len(config.Body)))
 	vars = append(vars, fmt.Sprintf("attack_token=%s", config.ManualAuth))
+	vars = append(vars, fmt.Sprintf("attack_method=%s", config.AttackMethod))
+
+	var headerBlock strings.Builder
+	for k, v := range config.Headers{
+		if strings.EqualFold(k, "Authorization") || 
+		   strings.EqualFold(k, "Host") || 
+		   strings.EqualFold(k, "Content-Length") ||
+		   strings.EqualFold(k, "Connection") {
+			continue
+		}
+		headerBlock.WriteString(fmt.Sprintf("%s: %s\n", k, v))
+	}
+	vars = append(vars, fmt.Sprintf("header_block=%s", headerBlock.String()))
 
 	execTarget := config.TargetURL
 	execTarget = strings.Replace(execTarget, "localhost", "127.0.0.1", 1)

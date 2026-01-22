@@ -30,7 +30,11 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 	if testType == "BFLA" && reqMethod != "" {
 		methodToUse = reqMethod
 	}
-
+	bodyToUse := inventory.SampleReqBody
+	isDestructive := methodToUse == "PUT" || methodToUse == "PATCH" || methodToUse == "POST"
+	if isDestructive && (bodyToUse == "" || bodyToUse == "{}") {
+		bodyToUse = `{"UserId":1}` 
+	}
 	flatHeaders := make(map[string]string)
 	for k, v := range inventory.SampleHeaders {
 		if len(v) > 0 { flatHeaders[k] = v[0] }
@@ -40,7 +44,7 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 		TargetURL:    targetBaseURL,
 		Method:       inventory.Method,
 		Path:         inventory.OriginalPath,
-		Body:         inventory.SampleReqBody,
+		Body:         bodyToUse,
 		Headers:      flatHeaders,
 		TestType:     testType,
 		ManualAuth:   tokenToUse,

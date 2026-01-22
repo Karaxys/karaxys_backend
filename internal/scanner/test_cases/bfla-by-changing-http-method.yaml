@@ -1,0 +1,58 @@
+id: bfla-method-swap
+info:
+  name: BFLA by Changing HTTP Method
+  author: karaxys
+  severity: high
+  description: The Scanner attempts to modify settings of a victim's organization using an attacker's token by changing the HTTP method. A successful finding means the server responded with a success status code (2xx) and did NOT return common authorization error messages. This indicates a Broken Function Level Authorization (BFLA)
+  tags: api, bfla, authorization, OWASP
+  reference:
+    - "https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/"
+  classification:
+    cwe-id:
+      - CWE-284
+      - CWE-285
+      - CWE-639
+    cve-id:
+      - CVE-2023-39350
+
+requests:
+  - raw:
+      - |
+        {{attack_method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        {{header_block}}
+
+        {{body}}
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable-data-leak
+        dsl:
+          - 'status_code == 200'
+          - 'contains(content_type, "json")'
+          - 'body.startsWith("[")'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "error", "Error")'
+
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'status_code >= 200 && status_code < 300'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "Access Denied", "Method Not Allowed", "cannot", "error", "Cannot", "Error", "Internal Server Error", "Unexpected path")'
+
+      - type: status
+        name: secure
+        status:
+          - 401
+          - 403
+          - 405
+
+      - type: status
+        name: error
+        status:
+          - 400
+          - 404
+          - 500
