@@ -30,15 +30,23 @@ requests:
     matchers-condition: or
     matchers:
       - type: dsl
-        name: vulnerable-data-leak
+        name: critical-data-leak
         dsl:
           - 'status_code == 200'
           - 'contains(content_type, "json")'
           - 'body.startsWith("[")'
+          - 'len(body) > 100'
           - '!contains_any(body, "Unauthorized", "Forbidden", "error", "Error")'
 
       - type: dsl
-        name: vulnerable
+        name: high-sensitive-exposure
+        dsl:
+          - 'status_code == 200'
+          - 'contains_any(body, "\"role\":", "\"admin\":", "\"password\":", "\"secret\":")'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "error", "Error")'
+
+      - type: dsl
+        name: low-method-allowed
         dsl:
           - 'status_code >= 200 && status_code < 300'
           - '!contains_any(body, "Unauthorized", "Forbidden", "Access Denied", "Method Not Allowed", "cannot", "error", "Cannot", "Error", "Internal Server Error", "Unexpected path")'
