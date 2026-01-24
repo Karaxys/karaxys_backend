@@ -1,0 +1,47 @@
+id: broken-user-auth
+info:
+  name: Broken user authentication by removing auth token
+  author: karaxys
+  severity: high
+  description: Broken user authentication occurs when an application fails to properly enforce authentication mechanisms, allowing attackers to access user accounts or sensitive information without valid credentials. This test case attempts to access protected resources without providing any authentication token. A successful finding means the server responded with a success status code (2xx) and did NOT return common authentication error messages, indicating a broken user authentication mechanism.
+  tags: api, authentication, OWASP
+  reference:
+    - "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"
+    - "https://owasp.org/www-project-api-security/"
+  classification:
+    cwe-id:
+      - CWE-287
+      - CWE-306
+    cve-id:
+      - CVE-2023-39350
+
+requests:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        
+        {{body}}
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'status_code >= 200 && status_code < 300'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "Access Denied", "error", "invalid token", "authentication required")'
+
+      - type: status
+        name: secure
+        status:
+          - 401
+          - 403
+          - 302
+
+      - type: status
+        name: error
+        status:
+          - 500

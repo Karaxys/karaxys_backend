@@ -7,6 +7,8 @@ import(
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,11 +72,38 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 			actualMethod = config.AttackMethod
 		}
 
+		var statusCode int
+		if event.Metadata != nil {
+			if val, ok := event.Metadata["status_code"]; ok {
+				if code, ok := val.(int); ok {
+					statusCode = code
+				} else if code, ok := val.(float64); ok {
+					statusCode = int(code)
+				}
+			}
+		}
+		if statusCode == 0 && len(event.Response) > 0 {
+			limit := 100
+			if len(event.Response) < limit {
+				limit = len(event.Response)
+			}
+			head := event.Response[:limit]
+			re := regexp.MustCompile(`HTTP/\d\.\d\s+(\d{3})`)
+			match := re.FindStringSubmatch(head)
+			if len(match) >= 2 {
+				if code, err := strconv.Atoi(match[1]); err == nil {
+					statusCode = code
+				}
+			}
+		}
+
 		res := ScanResult{
 			TestType:    config.TestType,
 			Vulnerable:  isVuln,
 			Severity:    severity,
 			Description: fmt.Sprintf("Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName),
+			ResponseStatus: statusCode,
+			ResponseBody:   event.Response,
 			Proof:       fmt.Sprintf("curl -v -X %s %s%s -H 'Authorization: %s'", actualMethod, config.TargetURL, config.Path, config.ManualAuth),
 			Timestamp:   time.Now(),
 		}

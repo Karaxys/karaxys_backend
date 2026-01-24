@@ -14,6 +14,8 @@ func GetTemplate(testType string) (string, error){
 		filename = "test_cases/bola-by-changing-auth-token.yaml"
 	case "BFLA":
 		filename = "test_cases/bfla-by-changing-http-method.yaml"
+	case "BROKEN_USER_AUTH":
+		filename = "test_cases/broken-user-authentication.yaml"
 	default:
 		return "", fmt.Errorf("unknown test type")
 	}

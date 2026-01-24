@@ -17,6 +17,8 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 		if tokenToUse == "" {
 			return ScanConfig{}, fmt.Errorf("BOLA requires an Attacker Token. Provide one in request or capture a second user.")
 		}
+	case "BROKEN_USER_AUTH":
+        tokenToUse = ""
 
 	default:
 		if reqManualToken != "" {
