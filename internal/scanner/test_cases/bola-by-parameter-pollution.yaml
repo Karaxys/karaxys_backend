@@ -1,0 +1,43 @@
+id: bola-param-pollution
+info:
+  name: BOLA via Parameter Pollution (HPP)
+  author: karaxys
+  severity: high
+  description: The Scanner attempts to exploit Broken Object Level Authorization (BOLA) vulnerabilities by sending multiple parameters with the same name (HTTP Parameter Pollution). A successful finding means the server responded with a success status code (2xx) and did NOT return common authorization error messages. This indicates a potential BOLA vulnerability due to improper handling of parameter pollution.
+  tags: api, bola, authorization, OWASP, hpp
+  reference:
+    - "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization.md"
+    - "https://portswigger.net/web-security/parameter-pollution"
+  classification:
+    cwe-id:
+      - CWE-284
+      - CWE-285
+      - CWE-639
+    cve-id:
+      - CVE-2023-39349
+
+requests:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        User-Agent: Karaxys-Scanner/1.0       
+        {{polluted_body}}
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'status_code >= 200 && status_code < 300'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "Error", "Invalid", "Bad Request")'
+
+      - type: status
+        name: secure
+        status:
+          - 400
+          - 401
+          - 403
+          - 500

@@ -12,6 +12,7 @@ type ScanConfig struct{
 	TestType      string
 	ManualAuth    string
 	AttackMethod  string
+	PollutedBody  string
 }
 
 type ScanResult struct {

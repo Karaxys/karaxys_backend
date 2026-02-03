@@ -117,11 +117,16 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	if hostname == "" {
 		hostname = config.TargetURL
 	}
+	bodyPayload := config.Body
+	if config.PollutedBody != "" {
+		bodyPayload = config.PollutedBody
+	}
 
 	vars = append(vars, fmt.Sprintf("Hostname=%s", hostname))
 	vars = append(vars, fmt.Sprintf("method=%s", config.Method))
 	vars = append(vars, fmt.Sprintf("path=%s", config.Path))
 	vars = append(vars, fmt.Sprintf("body=%s", config.Body))
+	vars = append(vars, fmt.Sprintf("polluted_body=%s", bodyPayload))
 	vars = append(vars, fmt.Sprintf("body_len=%d", len(config.Body)))
 	vars = append(vars, fmt.Sprintf("attack_token=%s", config.ManualAuth))
 	vars = append(vars, fmt.Sprintf("attack_method=%s", config.AttackMethod))
