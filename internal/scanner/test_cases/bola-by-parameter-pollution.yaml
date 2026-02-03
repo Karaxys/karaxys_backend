@@ -24,6 +24,7 @@ requests:
         Authorization: {{attack_token}}
         Content-Type: application/json
         User-Agent: Karaxys-Scanner/1.0       
+        
         {{polluted_body}}
 
     matchers-condition: or
