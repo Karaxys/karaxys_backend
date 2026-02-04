@@ -65,7 +65,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		// DEBUG: Dump the full event
 		eventBytes, _ := json.MarshalIndent(event, "", "  ")
 		log.Printf("Nuclei Raw Event:\n%s", string(eventBytes))
-		isVuln := event.MatcherName == "vulnerable"
+		isVuln := event.MatcherName == "vulnerable" || event.Matched != ""
 		severity := event.Info.SeverityHolder.Severity.String()
 		actualMethod := config.Method
 		if config.AttackMethod != "" {

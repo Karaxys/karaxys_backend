@@ -1,0 +1,50 @@
+id: swagger-check
+info:
+  name: Swagger/OpenAPI File Detection
+  author: karaxys
+  severity: low
+  description: The Scanner attempts to identify the presence of Swagger/OpenAPI documentation files by sending requests to common endpoints where such files are typically hosted. A successful finding means the server responded with a success status code (2xx) and the response body contains keywords commonly associated with Swagger/OpenAPI specifications, indicating that the API documentation may be publicly accessible.
+  tags: api, swagger, openapi, reconnaissance
+  reference:
+    - "https://swagger.io/specification/"
+    - "https://owasp.org/www-project-api-security/"
+  classification:
+    cwe-id:
+      - CWE-200
+    cve-id:
+      - CVE-2023-39351
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/swagger.json"
+      - "{{BaseURL}}/swagger.yaml"
+      - "{{BaseURL}}/swagger/"
+      - "{{BaseURL}}/swagger/index.html"
+      - "{{BaseURL}}/swagger/static/index.html"
+      - "{{BaseURL}}/api-docs"
+      - "{{BaseURL}}/v2/api-docs"
+      - "{{BaseURL}}/v3/api-docs"
+      - "{{BaseURL}}/swagger-ui.html"
+      - "{{BaseURL}}/swagger-ui/"
+      - "{{BaseURL}}/swagger-ui/index.html"
+      - "{{BaseURL}}/api/swagger"
+      - "{{BaseURL}}/api/swagger/index.html"
+      - "{{BaseURL}}/openapi.json"
+      
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+
+      - type: word
+        words:
+          - "swagger"
+          - "openapi"
+          - "paths"
+          - "Swagger UI"
+          - "swagger-ui"
+          - "swagger-ui-bundle"
+        condition: or
+        case-insensitive: true

@@ -21,6 +21,12 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 		}
 	case "BROKEN_USER_AUTH":
         tokenToUse = ""
+	case "SWAGGER_CHECK":
+		if reqManualToken != "" {
+			tokenToUse = reqManualToken
+		} else if len(inventory.SampleHeaders["Authorization"]) > 0 {
+			tokenToUse = inventory.SampleHeaders["Authorization"][0]
+		}
 
 	default:
 		if reqManualToken != "" {
@@ -34,17 +40,35 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 	if testType == "BFLA" && reqMethod != "" {
 		methodToUse = reqMethod
 	}
+	if testType == "SWAGGER_CHECK" {
+		methodToUse = "GET"
+	}
+	targetPath := inventory.OriginalPath
+	if testType == "SWAGGER_CHECK" {
+		targetPath = ""
+	}
+	if testType == "BFLA" && methodToUse == "DELETE" {
+		if !strings.HasSuffix(targetPath, "1") && !strings.HasSuffix(targetPath, "0"){
+			if !strings.HasSuffix(targetPath, "/"){
+				targetPath = targetPath + "/"
+			}
+			targetPath = targetPath + "1"
+		}
+	}
 	bodyToUse := inventory.SampleReqBody
 	isDestructive := methodToUse == "PUT" || methodToUse == "PATCH" || methodToUse == "POST"
 	if isDestructive && (bodyToUse == "" || bodyToUse == "{}") {
 		bodyToUse = `{"UserId":1}` 
+	}
+	if testType == "SWAGGER_CHECK"{
+		bodyToUse = ""
 	}
 	flatHeaders := make(map[string]string)
 	for k, v := range inventory.SampleHeaders {
 		if len(v) > 0 { flatHeaders[k] = v[0] }
 	}
 
-pollutedBody := ""
+	pollutedBody := ""
 	if testType == "BOLA_PARAMETER_POLLUTION" {
 		originalBody := inventory.SampleReqBody		
 		var targetParam string
@@ -96,7 +120,7 @@ pollutedBody := ""
 	return ScanConfig{
 		TargetURL:    targetBaseURL,
 		Method:       inventory.Method,
-		Path:         inventory.OriginalPath,
+		Path:         targetPath,
 		Body:         bodyToUse,
 		PollutedBody: pollutedBody,
 		Headers:      flatHeaders,
