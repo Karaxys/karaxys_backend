@@ -15,7 +15,7 @@ info:
     cve-id:
       - CVE-2023-39350
 
-requests:
+http:
   - raw:
       - |
         {{method}} {{path}} HTTP/1.1
