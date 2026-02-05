@@ -1,0 +1,42 @@
+id: jwt-none-algo
+info:
+  name: JWT None Algorithm Bypass
+  author: karaxys
+  severity: high
+  description: The API accepted a JWT where the algorithm was set to 'none'. This indicates that the server does not properly validate the JWT signature, allowing attackers to bypass authentication by crafting tokens with the 'none' algorithm. A successful finding means the server responded with a success status code (2xx) and did NOT return common authentication error messages, indicating a potential JWT validation flaw.
+  tags: api, jwt, authentication, OWASP
+  reference:
+    - "https://owasp.org/www-project-api-security/"
+    - "https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/"
+  classification:
+    cwe-id:
+      - CWE-347
+    cve-id:
+      - CVE-2023-XXXXXX
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+
+        {{body}}
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'status_code >= 200 && status_code < 300'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "Access Denied", "invalid token", "JsonWebTokenError")'
+
+      - type: status
+        name: secure
+        status:
+          - 401
+          - 403
+          - 500

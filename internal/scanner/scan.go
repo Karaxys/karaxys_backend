@@ -1,7 +1,6 @@
 package scanner
 import(
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -16,9 +15,7 @@ import(
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 )
 
-type Scanner struct {
-	// builder config goes here
-}
+type Scanner struct{}
 
 func NewScanner() *Scanner{
 	return &Scanner{}
@@ -30,18 +27,21 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	if err != nil{
 		return nil, fmt.Errorf("failed to get template: %v", err)
 	}
-
-	if err := os.MkdirAll("tmp", 0755); err != nil{
+	cwd, _ := os.Getwd()
+	tmpDir := filepath.Join(cwd, "tmp")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil{
 		return nil, fmt.Errorf("failed to create tmp directory: %v", err)
 	}
-	tmpFile, err := os.CreateTemp("tmp", "scan-*.yaml")
+	tmpFile, err := os.CreateTemp(tmpDir, "scan-*.yaml")
 	if err != nil{
 		return nil, fmt.Errorf("failed to create temp template: %v", err)
 	}
 	absPath, _ := filepath.Abs(tmpFile.Name())
+	normalizedPath := filepath.ToSlash(absPath) 	
 	defer os.Remove(absPath)
 
-	if _, err := tmpFile.WriteString(yamlContent); err != nil{
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		tmpFile.Close()
 		return nil, err
 	}
 	tmpFile.Close()
@@ -58,13 +58,9 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	var results []ScanResult
 	var mu sync.Mutex
 
-	// This is the function Nuclei will call when it finds a bug
 	onResult := func(event *output.ResultEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		// DEBUG: Dump the full event
-		eventBytes, _ := json.MarshalIndent(event, "", "  ")
-		log.Printf("Nuclei Raw Event:\n%s", string(eventBytes))
 		isVuln := event.MatcherName == "vulnerable" || event.Matched != ""
 		severity := event.Info.SeverityHolder.Severity.String()
 		actualMethod := config.Method
@@ -75,10 +71,11 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		var statusCode int
 		if event.Metadata != nil {
 			if val, ok := event.Metadata["status_code"]; ok {
-				if code, ok := val.(int); ok {
-					statusCode = code
-				} else if code, ok := val.(float64); ok {
-					statusCode = int(code)
+				switch v := val.(type){
+				case int:
+					statusCode = v
+				case float64:
+					statusCode = int(v)
 				}
 			}
 		}
@@ -98,14 +95,14 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		}
 
 		res := ScanResult{
-			TestType:    config.TestType,
-			Vulnerable:  isVuln,
-			Severity:    severity,
-			Description: fmt.Sprintf("Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName),
+			TestType:       config.TestType,
+			Vulnerable:     isVuln,
+			Severity:       severity,
+			Description:    fmt.Sprintf("Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName),
 			ResponseStatus: statusCode,
 			ResponseBody:   event.Response,
-			Proof:       fmt.Sprintf("curl -v -X %s %s%s -H 'Authorization: %s'", actualMethod, config.TargetURL, config.Path, config.ManualAuth),
-			Timestamp:   time.Now(),
+			Proof:          fmt.Sprintf("curl -v -X %s %s%s -H 'Authorization: %s'", actualMethod, config.TargetURL, config.Path, config.ManualAuth),
+			Timestamp:      time.Now(),
 		}
 		results = append(results, res)
 	}
@@ -125,11 +122,11 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	vars = append(vars, fmt.Sprintf("Hostname=%s", hostname))
 	vars = append(vars, fmt.Sprintf("method=%s", config.Method))
 	vars = append(vars, fmt.Sprintf("path=%s", config.Path))
-	vars = append(vars, fmt.Sprintf("body=%s", config.Body))
-	vars = append(vars, fmt.Sprintf("polluted_body=%s", bodyPayload))
-	vars = append(vars, fmt.Sprintf("body_len=%d", len(config.Body)))
 	vars = append(vars, fmt.Sprintf("attack_token=%s", config.ManualAuth))
 	vars = append(vars, fmt.Sprintf("attack_method=%s", config.AttackMethod))
+	vars = append(vars, fmt.Sprintf("body=%s", bodyPayload))
+	vars = append(vars, fmt.Sprintf("polluted_body=%s", bodyPayload))
+	vars = append(vars, fmt.Sprintf("body_len=%d", len(bodyPayload)))
 
 	var headerBlock strings.Builder
 	for k, v := range config.Headers{
@@ -147,7 +144,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	execTarget = strings.Replace(execTarget, "localhost", "127.0.0.1", 1)
 	err = ne.ExecuteNucleiWithOpts([]string{execTarget},
 		nuclei.WithTemplatesOrWorkflows(nuclei.TemplateSources{
-			Templates: []string{absPath},
+			Templates: []string{normalizedPath},
 		}),
 		nuclei.WithVars(vars),
 	)

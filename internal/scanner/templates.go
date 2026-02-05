@@ -20,6 +20,8 @@ func GetTemplate(testType string) (string, error){
 		filename = "test_cases/bola-by-parameter-pollution.yaml"
 	case "SWAGGER_CHECK": 
 		filename = "test_cases/swagger-check.yaml"
+	case "JWT_NONE_ALGO":
+		filename = "test_cases/jwt-none-algo.yaml"
 	default:
 		return "", fmt.Errorf("unknown test type")
 	}
