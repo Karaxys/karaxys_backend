@@ -45,6 +45,21 @@ func forgeNoneToken(originalAuthHeader string) (string, error){
 	return forgedToken, nil
 }
 
+func tamperSignature(originalAuthHeader string) (string, error) {
+	parts := strings.Split(originalAuthHeader, " ")
+	if len(parts) != 2 { return "", fmt.Errorf("invalid auth header") }	
+	jwtParts := strings.Split(parts[1], ".")
+	if len(jwtParts) != 3 { return "", fmt.Errorf("invalid jwt format") }
+	sig := jwtParts[2]
+	if len(sig) > 0 {
+		lastChar := sig[len(sig)-1]
+		newChar := lastChar + 1
+		newSig := sig[:len(sig)-1] + string(newChar)
+		return fmt.Sprintf("Bearer %s.%s.%s", jwtParts[0], jwtParts[1], newSig), nil
+	}
+	return "", fmt.Errorf("signature empty")
+}
+
 func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManualToken string, reqMethod string, testType string) (ScanConfig, error) {
 	tokenToUse := ""
 	switch testType{
@@ -79,6 +94,21 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
         forged, err := forgeNoneToken(validToken)
         if err != nil {
             return ScanConfig{}, fmt.Errorf("failed to forge token: %v", err)
+        }
+        tokenToUse = forged
+	case "JWT_INVALID_SIGNATURE":
+        validToken := ""
+        if reqManualToken != "" {
+            validToken = reqManualToken
+        } else if len(inventory.SampleHeaders["Authorization"]) > 0 {
+            validToken = inventory.SampleHeaders["Authorization"][0]
+        }
+        if validToken == "" {
+            return ScanConfig{}, fmt.Errorf("JWT_INVALID_SIGNATURE requires a valid token")
+        }
+        forged, err := tamperSignature(validToken)
+        if err != nil {
+            return ScanConfig{}, err
         }
         tokenToUse = forged
 
