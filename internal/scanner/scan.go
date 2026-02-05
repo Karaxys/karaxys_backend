@@ -37,7 +37,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		return nil, fmt.Errorf("failed to create temp template: %v", err)
 	}
 	absPath, _ := filepath.Abs(tmpFile.Name())
-	normalizedPath := filepath.ToSlash(absPath) 	
+	normalizedPath := filepath.ToSlash(absPath)
 	defer os.Remove(absPath)
 
 	if _, err := tmpFile.WriteString(yamlContent); err != nil {
@@ -61,7 +61,11 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	onResult := func(event *output.ResultEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		isVuln := event.MatcherName == "vulnerable" || event.Matched != ""
+		matcherName := strings.ToLower(event.MatcherName)
+		isVuln := matcherName == "vulnerable" ||
+			matcherName == "critical-data-leak" ||
+			matcherName == "high-sensitive-exposure" ||
+			matcherName == "low-method-allowed"
 		severity := event.Info.SeverityHolder.Severity.String()
 		actualMethod := config.Method
 		if config.AttackMethod != "" {
@@ -130,10 +134,10 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 
 	var headerBlock strings.Builder
 	for k, v := range config.Headers{
-		if strings.EqualFold(k, "Authorization") || 
-		   strings.EqualFold(k, "Host") || 
-		   strings.EqualFold(k, "Content-Length") ||
-		   strings.EqualFold(k, "Connection") {
+		if strings.EqualFold(k, "Authorization") ||
+			strings.EqualFold(k, "Host") ||
+			strings.EqualFold(k, "Content-Length") ||
+			strings.EqualFold(k, "Connection") {
 			continue
 		}
 		headerBlock.WriteString(fmt.Sprintf("%s: %s\n", k, v))

