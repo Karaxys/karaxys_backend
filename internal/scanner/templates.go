@@ -24,6 +24,8 @@ func GetTemplate(testType string) (string, error){
 		filename = "test_cases/jwt-none-algo.yaml"
 	case "JWT_INVALID_SIGNATURE":
 		filename = "test_cases/jwt-invalid-signature.yaml"
+	case "OPEN_REDIRECT":
+		filename = "test_cases/open-redirect.yaml"
 	default:
 		return "", fmt.Errorf("unknown test type")
 	}

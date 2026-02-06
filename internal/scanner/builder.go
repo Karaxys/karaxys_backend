@@ -4,6 +4,7 @@ import(
 	"strings"
 	"encoding/json"
 	"encoding/base64"
+	"net/url"
 	"karaxys_backend/internal/core"
 )
 
@@ -211,6 +212,56 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 			}
 		}else{
 			return ScanConfig{}, fmt.Errorf("BOLA_PARAMETER_POLLUTION failed: No pollutable parameter (BasketId/UserId) found in body")
+		}
+	}
+
+	if testType == "OPEN_REDIRECT" {
+		u, err := url.Parse(targetPath)
+		if err == nil {
+			q := u.Query()
+			redirectParams := []string{
+				"to", "next", "url", "target", "r", "redirect", "redirect_to", 
+				"return", "return_to", "dest", "destination", "go", "goto",
+				"link", "image_url", "forward", "out", "view",
+			}
+
+			foundParam := false
+			for paramName, values := range q{
+				lowerParam := strings.ToLower(paramName)               
+                isTarget := false
+                for _, target := range redirectParams {
+                    if strings.Contains(lowerParam, target) {
+                        isTarget = true
+                        break
+                    }
+                }
+                if !isTarget && len(values) > 0 {
+                     if strings.HasPrefix(values[0], "/") || strings.HasPrefix(values[0], "http") {
+                         isTarget = true
+                     }
+                }
+
+				if isTarget{
+					q.Set(paramName, "http://evil.com")
+					foundParam = true
+				}
+			}
+
+			if foundParam{
+				u.RawQuery = q.Encode()
+				targetPath = u.String()
+			}else{
+                var queryParts []string
+				for _, p := range redirectParams{
+					queryParts = append(queryParts, fmt.Sprintf("%s=http://evil.com", p))
+				}
+				sprayQuery := strings.Join(queryParts, "&")
+				if strings.Contains(targetPath, "?"){
+					targetPath += "&" + sprayQuery
+				}else{
+					targetPath += "?" + sprayQuery
+				}
+			}
 		}
 	}
 

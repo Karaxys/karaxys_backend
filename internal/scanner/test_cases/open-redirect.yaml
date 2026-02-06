@@ -1,0 +1,51 @@
+id: open-redirect
+info:
+  name: Open Redirect Detection
+  author: karaxys
+  severity: medium
+  description: >-
+    The application allows unvalidated redirects to arbitrary external domains.
+    A successful finding means the server responded with a 3xx status code and
+    the 'Location' header pointing to 'http://evil.com'. This indicates that the
+    application accepts untrusted input and uses it to redirect the user to a
+    malicious site.
+  tags: 'api, redirect, misconfiguration, OWASP'
+  reference:
+    - >-
+      https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html
+    - 'https://cwe.mitre.org/data/definitions/601.html'
+  classification:
+    cwe-id:
+      - CWE-601
+    cve-id:
+      - CVE-2023-XXXXXX
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+
+        {{body}}
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - status_code >= 300 && status_code < 400
+          - >-
+            contains(header, "Location: http://evil.com") || contains(header,
+            "Location: https://evil.com") || contains(header, "Location:
+            //evil.com")
+      - type: status
+        name: secure
+        status:
+          - 200
+          - 400
+          - 401
+          - 403
+          - 404
+          - 500
