@@ -1,0 +1,59 @@
+id: exposed-metrics
+info:
+  name: Exposed Prometheus/Metrics Endpoint
+  author: karaxys
+  severity: high
+  description: >-
+    The application exposes sensitive internal metrics (e.g., Prometheus,
+    Actuator). This allows attackers to gain insights into the application's
+    internal state, architecture, and resource usage (e.g. Memory usage, HTTP
+    request counts).
+  tags: 'api, misconfiguration, metrics, devops, OWASP'
+  reference:
+    - >-
+      https://cheatsheetseries.owasp.org/cheatsheets/Microservices_Security_Cheat_Sheet.html
+    - 'https://prometheus.io/docs/guides/node-exporter/'
+  classification:
+    cwe-id:
+      - CWE-200
+    cve-id:
+      - CVE-2023-XXXXXX
+http:
+  - raw:
+      - |
+        GET {{metric_path}} HTTP/1.1
+        Host: {{Hostname}}
+        User-Agent: Karaxys-Scanner/1.0
+    payloads:
+      metric_path:
+        - /metrics
+        - /prometheus
+        - /actuator/prometheus
+        - /api/metrics
+        - /admin/metrics
+        - /health
+        - /status
+    attack: pitchfork
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - status_code == 200
+          - >-
+            contains(body, "# HELP") || contains(body, "# TYPE") ||
+            contains(body, "go_gc_duration_seconds") || contains(body,
+            "process_cpu_seconds") || contains(body, "jvm_memory_used_bytes") ||
+            contains(body, "http_requests_total")
+
+      - type: status
+        name: secure
+        status:
+          - 401
+          - 403
+          - 404
+
+      - type: status
+        name: error
+        status:
+          - 500

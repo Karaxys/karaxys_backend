@@ -138,11 +138,11 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 	if testType == "BFLA" && reqMethod != "" {
 		methodToUse = reqMethod
 	}
-	if testType == "SWAGGER_CHECK" {
+	if testType == "SWAGGER_CHECK" || testType == "EXPOSED_METRICS" {
 		methodToUse = "GET"
 	}
 	targetPath := inventory.OriginalPath
-	if testType == "SWAGGER_CHECK" {
+	if testType == "SWAGGER_CHECK" || testType == "EXPOSED_METRICS" {
 		targetPath = ""
 	}
 	if testType == "BFLA" && methodToUse == "DELETE" {
@@ -158,7 +158,7 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 	if isDestructive && (bodyToUse == "" || bodyToUse == "{}") {
 		bodyToUse = `{"UserId":1}` 
 	}
-	if testType == "SWAGGER_CHECK"{
+	if testType == "SWAGGER_CHECK" || testType == "EXPOSED_METRICS" {
 		bodyToUse = ""
 	}
 	flatHeaders := make(map[string]string)
