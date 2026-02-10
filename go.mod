@@ -7,6 +7,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/projectdiscovery/nuclei/v3 v3.6.2
 	go.mongodb.org/mongo-driver v1.17.6
+	golang.org/x/time v0.14.0
 )
 
 require (
@@ -370,7 +371,6 @@ require (
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.39.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6 // indirect

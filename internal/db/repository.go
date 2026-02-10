@@ -3,20 +3,86 @@ import(
 	"context"
 	"log"
 	"time"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/bson"
 	"karaxys_backend/internal/core"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
+
+type Pagination struct {
+	Page  int
+	Limit int
+}
+
+type PaginatedResponse struct {
+	Data       interface{} `json:"data"`
+	Total      int64       `json:"total"`
+	Page       int         `json:"page"`
+	Limit      int         `json:"limit"`
+	TotalPages int         `json:"total_pages"`
+}
 
 func (db *DB) SaveLog(logEntry core.TrafficLog) error{
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	logEntry.ID = primitive.NewObjectID()
 	logEntry.CreatedAt = time.Now()
-	logEntry.IsScanned = false
 	_, err := db.Logs.InsertOne(ctx, logEntry)
 	if err != nil{
 		log.Printf("Failed to save log entry: %v\n", err)
 		return err
 	}
 	return nil
+}
+
+func (db *DB) GetInventory(p Pagination) (*PaginatedResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if p.Page < 1 { p.Page = 1 }
+	if p.Limit < 1 { p.Limit = 10 }
+	if p.Limit > 100 { p.Limit = 100 }
+	skip := (p.Page - 1) * p.Limit
+
+	coll := db.Client.Database("vuln_scanner").Collection("api_inventory")
+	total, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+
+	opts := options.Find().
+		SetLimit(int64(p.Limit)).
+		SetSkip(int64(skip)).
+		SetSort(bson.D{{Key: "updated_at", Value: -1}})
+
+	cursor, err := coll.Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return nil, err
+	}
+	
+	var results []core.ApiInventory
+	if err = cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+	totalPages := int(total) / p.Limit
+	if int(total)%p.Limit != 0 {
+		totalPages++
+	}
+	response := &PaginatedResponse{
+		Data:       results,
+		Total:      total,
+		Page:       p.Page,
+		Limit:      p.Limit,
+		TotalPages: totalPages,
+	}
+	return response, nil
+}
+
+func (db *DB) SaveScanResult(scanRes core.ScanResult) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	coll := db.Client.Database("vuln_scanner").Collection("scan_results")
+	_, err := coll.InsertOne(ctx, scanRes)
+	return err
 }

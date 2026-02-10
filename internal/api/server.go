@@ -3,39 +3,29 @@ import(
 	"context"
 	"encoding/json"
 	"fmt"
+	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/db"
+	"karaxys_backend/internal/scanner"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
-	"karaxys_backend/internal/core"
-	"karaxys_backend/internal/scanner"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Server struct{
-	DB      *mongo.Database
+	DB      *db.DB
 	Scanner *scanner.Scanner
+	DBName  string
 }
 
-func NewServer(db *mongo.Database) *Server{
+func NewServer(db *db.DB, dbName string) *Server {
 	return &Server{
 		DB:      db,
 		Scanner: scanner.NewScanner(),
+		DBName:  dbName,
 	}
-}
-
-func enableCORS(next http.Handler) http.Handler{
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (s *Server) Start(){
@@ -43,22 +33,19 @@ func (s *Server) Start(){
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
 
+	mw := NewMiddleware(50, 100)
+	handler := mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mux)))))
+
 	log.Println("Backend running on http://localhost:8081")
-	log.Fatal(http.ListenAndServe(":8081", enableCORS(mux)))
+	log.Fatal(http.ListenAndServe(":8081", handler))
 }
 
 func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request){
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cursor, err := s.DB.Collection("api_inventory").Find(ctx, bson.M{})
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	results, err := s.DB.GetInventory(db.Pagination{Page: page, Limit: limit})
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	var results []core.ApiInventory
-	if err = cursor.All(ctx, &results); err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, "Database Error", 500)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -81,13 +68,15 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request){
 
 	objID, err := primitive.ObjectIDFromHex(req.InventoryID)
 	if err != nil {
-		http.Error(w, "Invalid Inventory ID", 400); return
+		http.Error(w, "Invalid Inventory ID", 400)
+		return
 	}
 
 	var target core.ApiInventory
-	err = s.DB.Collection("api_inventory").FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&target)
+	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&target)
 	if err != nil {
-		http.Error(w, "Endpoint Not Found", 404); return
+		http.Error(w, "Endpoint Not Found", 404)
+		return
 	}
 
 	if target.BaseURL == "" {
@@ -113,6 +102,22 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request){
 		http.Error(w, fmt.Sprintf("Scan Failed: %v", err), 500)
 		return
 	}
+
+	for _, res := range results {
+		logEntry := core.ScanResult{
+			InventoryID:    target.ID,
+			TestType:       res.TestType,
+			Vulnerable:     res.Vulnerable,
+			Severity:       res.Severity,
+			Description:    res.Description,
+			Proof:          res.Proof,
+			ResponseStatus: res.ResponseStatus,
+			ResponseBody:   res.ResponseBody,
+			CreatedAt:      time.Now(),
+		}
+		s.DB.SaveScanResult(logEntry)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
 }

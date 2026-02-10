@@ -1,8 +1,8 @@
 package main
 
 import(
-	"karaxys_backend/internal/api"
 	"karaxys_backend/internal/analyzer"
+	"karaxys_backend/internal/api"
 	"karaxys_backend/internal/browser"
 	"karaxys_backend/internal/config"
 	"karaxys_backend/internal/core"
@@ -24,7 +24,7 @@ func main(){
 	}
 	defer database.Disconnect()
 	processor := analyzer.NewProcessor(database.Client.Database(cfg.MongoDBName))
-	apiServer := api.NewServer(database.Client.Database(cfg.MongoDBName))
+	apiServer := api.NewServer(database, cfg.MongoDBName)
 	go func() {
 		apiServer.Start()
 	}()

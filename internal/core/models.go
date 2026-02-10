@@ -34,3 +34,16 @@ type ApiInventory struct {
 	CreatedAt      time.Time           `bson:"created_at"`
 	UpdatedAt      time.Time           `bson:"updated_at"`
 }
+
+type ScanResult struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty"`
+	InventoryID    primitive.ObjectID `bson:"inventory_id"`	
+	TestType       string             `bson:"test_type"`
+	Vulnerable     bool               `bson:"vulnerable"`
+	Severity       string             `bson:"severity"`
+	Description    string             `bson:"description"`
+	Proof          string             `bson:"proof"`
+	ResponseStatus int                `bson:"response_status"`
+	ResponseBody   string             `bson:"response_body"`	
+	CreatedAt      time.Time          `bson:"created_at"`
+}
