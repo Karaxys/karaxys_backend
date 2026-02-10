@@ -43,7 +43,16 @@ func (s *Server) Start(){
 func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request){
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	results, err := s.DB.GetInventory(db.Pagination{Page: page, Limit: limit})
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	sortBy := r.URL.Query().Get("sort_by")
+	sortOrder := r.URL.Query().Get("sort_order")
+	results, err := s.DB.GetInventory(db.Pagination{
+		Page:      page,
+		Limit:     limit,
+		Offset:    offset,
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
+	})
 	if err != nil {
 		http.Error(w, "Database Error", 500)
 		return
