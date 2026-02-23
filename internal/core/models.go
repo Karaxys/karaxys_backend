@@ -26,6 +26,7 @@ type ApiInventory struct {
 	PathPattern    string              `bson:"path_pattern"`
 	OriginalPath   string              `bson:"original_path"`	
 	SensitiveData  []string            `bson:"sensitive_data"`
+	RiskLevel      string              `bson:"risk_level"`
 	SchemaReq      map[string]string   `bson:"schema_req"` 
 	SampleHeaders  map[string][]string `bson:"sample_headers"`
 	ParamValues    map[string][]string `bson:"param_values"`
