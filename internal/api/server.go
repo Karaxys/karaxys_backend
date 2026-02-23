@@ -32,6 +32,7 @@ func (s *Server) Start(){
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
+	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 
 	mw := NewMiddleware(50, 100)
 	handler := mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mux)))))
@@ -129,4 +130,21 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request){
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
+}
+
+func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request){
+	idStr := r.PathValue("id")
+	objID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		http.Error(w, "Invalid ID", 400)
+		return
+	}
+	var target core.ApiInventory
+	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&target)
+	if err != nil {
+		http.Error(w, "Endpoint Not Found", 404)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(target)
 }
