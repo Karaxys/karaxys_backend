@@ -14,7 +14,7 @@ import(
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-type Server struct{
+type Server struct {
 	DB      *db.DB
 	Scanner *scanner.Scanner
 	DBName  string
@@ -28,10 +28,11 @@ func NewServer(db *db.DB, dbName string) *Server {
 	}
 }
 
-func (s *Server) Start(){
+func (s *Server) Start() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
+	mux.HandleFunc("GET /scan-results", s.handleGetScanResults)
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 
 	mw := NewMiddleware(50, 100)
@@ -41,7 +42,7 @@ func (s *Server) Start(){
 	log.Fatal(http.ListenAndServe(":8081", handler))
 }
 
-func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request){
+func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -62,14 +63,14 @@ func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request){
 	json.NewEncoder(w).Encode(results)
 }
 
-type ScanRequest struct{
+type ScanRequest struct {
 	InventoryID   string `json:"inventory_id"`
 	TestType      string `json:"test_type"`
 	AttackerToken string `json:"attacker_token"`
 	AttackMethod  string `json:"attack_method"`
 }
 
-func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request){
+func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	var req ScanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", 400)
@@ -108,7 +109,7 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request){
 
 	log.Printf("Scan Triggered: %s on %s", req.TestType, target.PathPattern)
 	results, err := s.Scanner.ExecuteScan(config)
-	if err != nil{
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Scan Failed: %v", err), 500)
 		return
 	}
@@ -132,7 +133,41 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request){
 	json.NewEncoder(w).Encode(results)
 }
 
-func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request){
+func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	sortBy := r.URL.Query().Get("sort_by")
+	sortOrder := r.URL.Query().Get("sort_order")
+	inventoryIDStr := r.URL.Query().Get("inventory_id")
+
+	var inventoryID *primitive.ObjectID
+	if inventoryIDStr != "" {
+		objID, err := primitive.ObjectIDFromHex(inventoryIDStr)
+		if err != nil {
+			http.Error(w, "Invalid inventory_id", http.StatusBadRequest)
+			return
+		}
+		inventoryID = &objID
+	}
+
+	results, err := s.DB.GetScanResults(db.Pagination{
+		Page:      page,
+		Limit:     limit,
+		Offset:    offset,
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
+	}, inventoryID)
+	if err != nil {
+		http.Error(w, "Database Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
+}
+
+func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	objID, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
