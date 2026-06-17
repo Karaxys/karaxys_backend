@@ -14,6 +14,9 @@ import (
 const (
 	defaultTrafficLogMaxEvents = 1000
 	defaultTrafficLogTTL       = 24 * time.Hour
+	mongoConnectTimeout        = 10 * time.Second
+	mongoPingTimeout           = 10 * time.Second
+	mongoIndexTimeout          = 60 * time.Second
 )
 
 type DB struct {
@@ -51,14 +54,18 @@ func normalizeLogRetention(retention LogRetention) LogRetention {
 }
 
 func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	connectCtx, connectCancel := context.WithTimeout(context.Background(), mongoConnectTimeout)
+	defer connectCancel()
 	clientOptions := options.Client().ApplyURI(uri)
-	client, err := mongo.Connect(ctx, clientOptions)
+	client, err := mongo.Connect(connectCtx, clientOptions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
-	if err := client.Ping(ctx, nil); err != nil {
+
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), mongoPingTimeout)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		_ = client.Disconnect(context.Background())
 		return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
 	}
 
@@ -79,7 +86,9 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		ScanResults:          mongoDB.Collection("scan_results"),
 		LogRetention:         retention,
 	}
-	if err := database.EnsureIndexes(ctx); err != nil {
+	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
+	defer indexCancel()
+	if err := database.EnsureIndexes(indexCtx); err != nil {
 		_ = client.Disconnect(context.Background())
 		return nil, fmt.Errorf("failed to create MongoDB indexes: %w", err)
 	}
@@ -97,7 +106,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 	db.LogRetention = retention
 
 	ttlSeconds := int32(retention.TTL.Seconds())
-	if err := createIndexes(ctx, db.Logs, []mongo.IndexModel{
+	if err := createIndexes(ctx, "traffic_logs", db.Logs, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "created_at", Value: 1}},
 			Options: options.Index().SetName("traffic_logs_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
@@ -118,7 +127,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	if err := createIndexes(ctx, db.TrafficConversations, []mongo.IndexModel{
+	if err := createIndexes(ctx, "traffic_conversations", db.TrafficConversations, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "captured_at", Value: 1}},
 			Options: options.Index().SetName("traffic_conversations_captured_at_ttl").SetExpireAfterSeconds(ttlSeconds),
@@ -143,7 +152,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	if err := createIndexes(ctx, db.IngestionLogs, []mongo.IndexModel{
+	if err := createIndexes(ctx, "ingestion_logs", db.IngestionLogs, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "created_at", Value: 1}},
 			Options: options.Index().SetName("ingestion_logs_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
@@ -156,7 +165,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	if err := createIndexes(ctx, db.IngestDeadLetters, []mongo.IndexModel{
+	if err := createIndexes(ctx, "ingest_dead_letters", db.IngestDeadLetters, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "created_at", Value: 1}},
 			Options: options.Index().SetName("ingest_dead_letters_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
@@ -169,7 +178,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	if err := createIndexes(ctx, db.ScanJobs, []mongo.IndexModel{
+	if err := createIndexes(ctx, "scan_jobs", db.ScanJobs, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "status", Value: 1}, {Key: "created_at", Value: 1}},
 			Options: options.Index().SetName("scan_jobs_status_created_at"),
@@ -182,7 +191,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	return createIndexes(ctx, db.ScanResults, []mongo.IndexModel{
+	return createIndexes(ctx, "scan_results", db.ScanResults, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "job_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_results_job_created_at"),
@@ -194,10 +203,13 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 	})
 }
 
-func createIndexes(ctx context.Context, collection *mongo.Collection, indexes []mongo.IndexModel) error {
+func createIndexes(ctx context.Context, collectionName string, collection *mongo.Collection, indexes []mongo.IndexModel) error {
 	if collection == nil || len(indexes) == 0 {
 		return nil
 	}
 	_, err := collection.Indexes().CreateMany(ctx, indexes)
-	return err
+	if err != nil {
+		return fmt.Errorf("%s indexes: %w", collectionName, err)
+	}
+	return nil
 }

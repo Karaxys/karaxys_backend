@@ -49,6 +49,10 @@ func (s *Scanner) ExecuteScan(config core.ScanConfig) ([]core.ScanExecutionResul
 	}
 	tmpFile.Close()
 
+	if err := ensureNucleiIgnoreFile(); err != nil {
+		log.Printf("Could not prepare nuclei ignore file: %v", err)
+	}
+
 	ne, err := nuclei.NewThreadSafeNucleiEngineCtx(
 		context.Background(),
 		nuclei.DisableUpdateCheck(),
@@ -161,4 +165,21 @@ func (s *Scanner) ExecuteScan(config core.ScanConfig) ([]core.ScanExecutionResul
 	}
 
 	return results, nil
+}
+
+func ensureNucleiIgnoreFile() error {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	nucleiDir := filepath.Join(configDir, "nuclei")
+	if err := os.MkdirAll(nucleiDir, 0o700); err != nil {
+		return err
+	}
+	ignoreFile := filepath.Join(nucleiDir, ".nuclei-ignore")
+	file, err := os.OpenFile(ignoreFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	return file.Close()
 }

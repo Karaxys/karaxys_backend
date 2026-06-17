@@ -12,7 +12,7 @@ docker compose up -d mongo
 
 Default local values:
 
-- `MONGO_URI=mongodb://localhost:27017`
+- `MONGO_URI=mongodb://127.0.0.1:27017/?directConnection=true`
 - `MONGO_DB_NAME=karaxys`
 - `TRAFFIC_LOG_MAX_EVENTS=1000`
 - `TRAFFIC_LOG_TTL_HOURS=24`

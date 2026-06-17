@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultMongoURI            = "mongodb://localhost:27017"
+	defaultMongoURI            = "mongodb://127.0.0.1:27017/?directConnection=true"
 	defaultMongoDBName         = "karaxys"
 	defaultTrafficLogMaxEvents = 1000
 	defaultTrafficLogTTLHours  = 24
