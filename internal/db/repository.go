@@ -1,13 +1,14 @@
 package db
-import(
+
+import (
 	"context"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"karaxys_backend/internal/core"
 	"log"
 	"strings"
 	"time"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Pagination struct {
@@ -30,8 +31,12 @@ type PaginatedResponse struct {
 func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	logEntry.ID = primitive.NewObjectID()
-	logEntry.CreatedAt = time.Now()
+	if logEntry.ID.IsZero() {
+		logEntry.ID = primitive.NewObjectID()
+	}
+	if logEntry.CreatedAt.IsZero() {
+		logEntry.CreatedAt = time.Now()
+	}
 	_, err := db.Logs.InsertOne(ctx, logEntry)
 	if err != nil {
 		log.Printf("Failed to save log entry: %v\n", err)

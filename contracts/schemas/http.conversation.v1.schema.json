@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karaxys.local/contracts/http.conversation.v1.schema.json",
+  "title": "Karaxys HTTP Conversation",
+  "description": "Normalized API request/response conversation emitted by the reassembler and accepted by backend ingestion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_id", "schema_version", "capture_source", "captured_at", "http"],
+  "properties": {
+    "_id": {
+      "$ref": "#/$defs/object_id"
+    },
+    "schema_version": {
+      "const": "http.conversation.v1"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capture_source": {
+      "type": "string",
+      "enum": ["ebpf", "proxy", "har", "pcap", "sdk", "gateway", "cloud"]
+    },
+    "capture_mode": {
+      "type": "string",
+      "enum": ["pid", "pid_tree", "container", "daemonset", "proxy", "host", "unknown"]
+    },
+    "captured_at": {
+      "$ref": "#/$defs/date"
+    },
+    "connection": {
+      "$ref": "#/$defs/connection"
+    },
+    "process": {
+      "$ref": "#/$defs/process"
+    },
+    "container": {
+      "$ref": "#/$defs/container"
+    },
+    "loss": {
+      "$ref": "#/$defs/loss"
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "response"],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "response": {
+          "$ref": "#/$defs/response"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "object_id": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$oid"],
+      "properties": {
+        "$oid": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{24}$"
+        }
+      }
+    },
+    "date": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$date"],
+      "properties": {
+        "$date": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "headers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "url", "host", "path"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "pattern": "^[A-Z]+$"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "body": {
+          "type": "string"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status_code": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "body": {
+          "type": "string"
+        }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "src_ip": {
+          "type": "string"
+        },
+        "src_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "dst_ip": {
+          "type": "string"
+        },
+        "dst_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "protocol": {
+          "type": "string",
+          "enum": ["tcp", "udp", "unix", "unknown"]
+        },
+        "family": {
+          "type": "string",
+          "enum": ["ipv4", "ipv6", "unix", "unknown"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["inbound", "outbound", "client", "server", "unknown"]
+        }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "exe": {
+          "type": "string"
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "pod": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      }
+    },
+    "loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "original_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "captured_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        },
+        "sequence_gap": {
+          "type": "boolean"
+        },
+        "expected_next_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actual_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

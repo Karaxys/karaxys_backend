@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karaxys.local/contracts/scan.job.v1.schema.json",
+  "title": "Karaxys Scan Job",
+  "description": "Asynchronous active-testing job created by the backend and consumed by scanner workers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "created_at",
+    "inventory_id",
+    "test_type",
+    "target"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "scan.job.v1"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "inventory_id": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{24}$"
+    },
+    "test_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "template_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "normal", "high"]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "method", "path"],
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "pattern": "^[A-Z]+$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "body": {
+          "type": "string"
+        },
+        "polluted_body": {
+          "type": "string"
+        },
+        "attack_method": {
+          "type": "string",
+          "pattern": "^[A-Z]+$"
+        }
+      }
+    },
+    "auth": {
+      "description": "Production jobs should use secret references instead of plaintext credentials.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "secret_ref"]
+        },
+        "secret_ref": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "max_requests": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rate_limit_per_second": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

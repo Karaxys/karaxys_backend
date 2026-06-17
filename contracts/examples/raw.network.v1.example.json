@@ -1,0 +1,48 @@
+{
+  "schema_version": "raw.network.v1",
+  "tenant_id": "tenant-local",
+  "project_id": "project-dev",
+  "agent_id": "agent-linux-01",
+  "capture_source": "ebpf",
+  "capture_mode": "container",
+  "timestamp": 1716200000123456789,
+  "pid": 4242,
+  "tid": 4242,
+  "fd": 12,
+  "generation": 3,
+  "seq": 9,
+  "chunk_index": 0,
+  "chunk_count": 1,
+  "direction": 1,
+  "event_type": 0,
+  "flags": 0,
+  "original_size": 55,
+  "size": 55,
+  "payload": "R0VUIC9hcGkvdjEvdXNlcnMgSFRUUC8xLjENCkhvc3Q6IGFwaS5leGFtcGxlLmxvY2FsDQoNCg==",
+  "connection": {
+    "src_ip": "10.0.0.21",
+    "src_port": 41234,
+    "dst_ip": "10.0.0.42",
+    "dst_port": 8080,
+    "protocol": "tcp",
+    "family": "ipv4",
+    "role": "outbound"
+  },
+  "process": {
+    "pid": 4242,
+    "name": "orders-api",
+    "exe": "/usr/local/bin/orders-api"
+  },
+  "container": {
+    "id": "8f2d7c2b9a01",
+    "name": "orders-api",
+    "image": "karaxys/orders-api:dev",
+    "namespace": "default",
+    "pod": "orders-api-778b9c6d9f-pk8xq",
+    "node": "worker-01"
+  },
+  "loss": {
+    "truncated": false,
+    "sequence_gap": false
+  }
+}

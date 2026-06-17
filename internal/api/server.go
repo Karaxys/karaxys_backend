@@ -1,15 +1,20 @@
 package api
-import(
+
+import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"karaxys_backend/internal/analyzer"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
+	"karaxys_backend/internal/ingest"
 	"karaxys_backend/internal/scanner"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -18,13 +23,23 @@ type Server struct {
 	DB      *db.DB
 	Scanner *scanner.Scanner
 	DBName  string
+	Ingest  *ingest.Service
 }
 
-func NewServer(db *db.DB, dbName string) *Server {
+func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Server {
+	var processor *analyzer.Processor
+	if len(processors) > 0 {
+		processor = processors[0]
+	}
+	if processor == nil {
+		processor = analyzer.NewProcessor(db.Client.Database(dbName))
+	}
+
 	return &Server{
 		DB:      db,
 		Scanner: scanner.NewScanner(),
 		DBName:  dbName,
+		Ingest:  ingest.NewService(db, processor, os.Getenv("KARAXYS_AGENT_TOKEN")),
 	}
 }
 
@@ -34,12 +49,21 @@ func (s *Server) Start() {
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
 	mux.HandleFunc("GET /scan-results", s.handleGetScanResults)
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
+	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
 
 	mw := NewMiddleware(50, 100)
 	handler := mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mux)))))
 
 	log.Println("Backend running on http://localhost:8081")
 	log.Fatal(http.ListenAndServe(":8081", handler))
+}
+
+func (s *Server) handleIngestConversation(w http.ResponseWriter, r *http.Request) {
+	if s.Ingest == nil {
+		http.Error(w, "Ingestion unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.Ingest.HandleConversation(w, r)
 }
 
 func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +140,7 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 
 	for _, res := range results {
 		logEntry := core.ScanResult{
+			SchemaVersion:  res.SchemaVersion,
 			InventoryID:    target.ID,
 			TestType:       res.TestType,
 			Vulnerable:     res.Vulnerable,

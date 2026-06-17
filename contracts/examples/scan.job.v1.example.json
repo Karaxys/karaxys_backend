@@ -1,0 +1,31 @@
+{
+  "schema_version": "scan.job.v1",
+  "tenant_id": "tenant-local",
+  "project_id": "project-dev",
+  "job_id": "scan_01JZ8N0B9XCKXH0W1W9Y8P7W4E",
+  "created_by": "user_01JZ8N0G0D4Q28K5MG6T4J0R7S",
+  "created_at": "2026-06-16T10:05:00Z",
+  "inventory_id": "6650f8cb1c5e7c6c1f93a111",
+  "test_type": "bola",
+  "template_id": "karaxys/bola/basic-object-id",
+  "priority": "normal",
+  "target": {
+    "base_url": "http://api.example.local",
+    "method": "GET",
+    "path": "/api/v1/users?id=123",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "body": "",
+    "attack_method": "GET"
+  },
+  "auth": {
+    "mode": "secret_ref",
+    "secret_ref": "secret://projects/project-dev/scanner/attacker-token"
+  },
+  "limits": {
+    "timeout_seconds": 120,
+    "max_requests": 25,
+    "rate_limit_per_second": 2
+  }
+}

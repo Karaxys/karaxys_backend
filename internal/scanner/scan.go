@@ -1,7 +1,11 @@
 package scanner
-import(
+
+import (
 	"context"
 	"fmt"
+	nuclei "github.com/projectdiscovery/nuclei/v3/lib"
+	"github.com/projectdiscovery/nuclei/v3/pkg/output"
+	"karaxys_backend/internal/contracts"
 	"log"
 	"net/url"
 	"os"
@@ -11,29 +15,27 @@ import(
 	"strings"
 	"sync"
 	"time"
-	nuclei "github.com/projectdiscovery/nuclei/v3/lib"
-	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 )
 
 type Scanner struct{}
 
-func NewScanner() *Scanner{
+func NewScanner() *Scanner {
 	return &Scanner{}
 }
 
 func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	log.Printf("Starting %s Scan on %s %s", config.TestType, config.Method, config.Path)
 	yamlContent, err := GetTemplate(config.TestType)
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("failed to get template: %v", err)
 	}
 	cwd, _ := os.Getwd()
 	tmpDir := filepath.Join(cwd, "tmp")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil{
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create tmp directory: %v", err)
 	}
 	tmpFile, err := os.CreateTemp(tmpDir, "scan-*.yaml")
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("failed to create temp template: %v", err)
 	}
 	absPath, _ := filepath.Abs(tmpFile.Name())
@@ -51,7 +53,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		nuclei.DisableUpdateCheck(),
 		nuclei.EnableMatcherStatus(),
 	)
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("failed to init nuclei engine: %v", err)
 	}
 	defer ne.Close()
@@ -75,7 +77,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		var statusCode int
 		if event.Metadata != nil {
 			if val, ok := event.Metadata["status_code"]; ok {
-				switch v := val.(type){
+				switch v := val.(type) {
 				case int:
 					statusCode = v
 				case float64:
@@ -99,6 +101,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		}
 
 		res := ScanResult{
+			SchemaVersion:  contracts.SchemaScanResultV1,
 			TestType:       config.TestType,
 			Vulnerable:     isVuln,
 			Severity:       severity,
@@ -133,7 +136,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 	vars = append(vars, fmt.Sprintf("body_len=%d", len(bodyPayload)))
 
 	var headerBlock strings.Builder
-	for k, v := range config.Headers{
+	for k, v := range config.Headers {
 		if strings.EqualFold(k, "Authorization") ||
 			strings.EqualFold(k, "Host") ||
 			strings.EqualFold(k, "Content-Length") ||
@@ -152,7 +155,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		}),
 		nuclei.WithVars(vars),
 	)
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("nuclei execution failed: %v", err)
 	}
 

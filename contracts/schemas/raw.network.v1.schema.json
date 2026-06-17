@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karaxys.local/contracts/raw.network.v1.schema.json",
+  "title": "Karaxys Raw Network Event",
+  "description": "Raw eBPF syscall/network chunk emitted by the capture agent before stream reassembly.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capture_source",
+    "timestamp",
+    "pid",
+    "tid",
+    "fd",
+    "generation",
+    "seq",
+    "chunk_index",
+    "chunk_count",
+    "direction",
+    "event_type",
+    "flags",
+    "size",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Canonical value is raw.network.v1. raw.v1 is temporarily accepted for the current tracer.",
+      "enum": ["raw.network.v1", "raw.v1"]
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capture_source": {
+      "const": "ebpf"
+    },
+    "capture_mode": {
+      "type": "string",
+      "enum": ["pid", "pid_tree", "container", "daemonset", "host", "unknown"]
+    },
+    "timestamp": {
+      "description": "Kernel event timestamp in nanoseconds as emitted by the agent.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "fd": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "chunk_index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "chunk_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "direction": {
+      "description": "0 means read path, 1 means write path in the current tracer.",
+      "type": "integer",
+      "enum": [0, 1]
+    },
+    "event_type": {
+      "description": "0 means data event, 1 means close event in the current tracer.",
+      "type": "integer",
+      "enum": [0, 1]
+    },
+    "flags": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "original_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "description": "Base64-encoded bytes produced by Go json.Marshal on []byte.",
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "connection": {
+      "$ref": "#/$defs/connection"
+    },
+    "process": {
+      "$ref": "#/$defs/process"
+    },
+    "container": {
+      "$ref": "#/$defs/container"
+    },
+    "loss": {
+      "$ref": "#/$defs/loss"
+    }
+  },
+  "$defs": {
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "src_ip": {
+          "type": "string"
+        },
+        "src_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "dst_ip": {
+          "type": "string"
+        },
+        "dst_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "protocol": {
+          "type": "string",
+          "enum": ["tcp", "udp", "unix", "unknown"]
+        },
+        "family": {
+          "type": "string",
+          "enum": ["ipv4", "ipv6", "unix", "unknown"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["inbound", "outbound", "client", "server", "unknown"]
+        }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "exe": {
+          "type": "string"
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "pod": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      }
+    },
+    "loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "original_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "captured_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        },
+        "sequence_gap": {
+          "type": "boolean"
+        },
+        "expected_next_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actual_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
