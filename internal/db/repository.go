@@ -52,6 +52,54 @@ func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 	return nil
 }
 
+func (db *DB) SaveConversation(conversation core.TrafficConversation) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if conversation.ID.IsZero() {
+		conversation.ID = primitive.NewObjectID()
+	}
+	if conversation.CreatedAt.IsZero() {
+		conversation.CreatedAt = time.Now()
+	}
+	_, err := db.TrafficConversations.InsertOne(ctx, conversation)
+	if err != nil {
+		log.Printf("Failed to save traffic conversation: %v\n", err)
+	}
+	return err
+}
+
+func (db *DB) SaveIngestionLog(logEntry core.IngestionLog) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if logEntry.ID.IsZero() {
+		logEntry.ID = primitive.NewObjectID()
+	}
+	if logEntry.CreatedAt.IsZero() {
+		logEntry.CreatedAt = time.Now()
+	}
+	_, err := db.IngestionLogs.InsertOne(ctx, logEntry)
+	if err != nil {
+		log.Printf("Failed to save ingestion log: %v\n", err)
+	}
+	return err
+}
+
+func (db *DB) SaveIngestDeadLetter(deadLetter core.IngestDeadLetter) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if deadLetter.ID.IsZero() {
+		deadLetter.ID = primitive.NewObjectID()
+	}
+	if deadLetter.CreatedAt.IsZero() {
+		deadLetter.CreatedAt = time.Now()
+	}
+	_, err := db.IngestDeadLetters.InsertOne(ctx, deadLetter)
+	if err != nil {
+		log.Printf("Failed to save ingest dead letter: %v\n", err)
+	}
+	return err
+}
+
 func (db *DB) PruneTrafficLogs(ctx context.Context) error {
 	retention := normalizeLogRetention(db.LogRetention)
 	if retention.MaxEvents <= 0 {

@@ -17,10 +17,13 @@ const (
 )
 
 type DB struct {
-	Client       *mongo.Client
-	Name         string
-	Logs         *mongo.Collection
-	LogRetention LogRetention
+	Client               *mongo.Client
+	Name                 string
+	Logs                 *mongo.Collection
+	TrafficConversations *mongo.Collection
+	IngestionLogs        *mongo.Collection
+	IngestDeadLetters    *mongo.Collection
+	LogRetention         LogRetention
 }
 
 type LogRetention struct {
@@ -62,11 +65,15 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 	if len(retentionOverrides) > 0 {
 		retention = normalizeLogRetention(retentionOverrides[0])
 	}
+	mongoDB := client.Database(dbName)
 	database := &DB{
-		Client:       client,
-		Name:         dbName,
-		Logs:         client.Database(dbName).Collection("traffic_logs"),
-		LogRetention: retention,
+		Client:               client,
+		Name:                 dbName,
+		Logs:                 mongoDB.Collection("traffic_logs"),
+		TrafficConversations: mongoDB.Collection("traffic_conversations"),
+		IngestionLogs:        mongoDB.Collection("ingestion_logs"),
+		IngestDeadLetters:    mongoDB.Collection("ingest_dead_letters"),
+		LogRetention:         retention,
 	}
 	if err := database.EnsureIndexes(ctx); err != nil {
 		_ = client.Disconnect(context.Background())
@@ -86,7 +93,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 	db.LogRetention = retention
 
 	ttlSeconds := int32(retention.TTL.Seconds())
-	indexes := []mongo.IndexModel{
+	if err := createIndexes(ctx, db.Logs, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "created_at", Value: 1}},
 			Options: options.Index().SetName("traffic_logs_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
@@ -103,8 +110,64 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "method", Value: 1}, {Key: "host", Value: 1}, {Key: "path", Value: 1}},
 			Options: options.Index().SetName("traffic_logs_method_host_path"),
 		},
+	}); err != nil {
+		return err
 	}
 
-	_, err := db.Logs.Indexes().CreateMany(ctx, indexes)
+	if err := createIndexes(ctx, db.TrafficConversations, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "captured_at", Value: 1}},
+			Options: options.Index().SetName("traffic_conversations_captured_at_ttl").SetExpireAfterSeconds(ttlSeconds),
+		},
+		{
+			Keys:    bson.D{{Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("traffic_conversations_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "capture_source", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("traffic_conversations_capture_source_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "agent_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("traffic_conversations_agent_id_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "method", Value: 1}, {Key: "host", Value: 1}, {Key: "path", Value: 1}},
+			Options: options.Index().SetName("traffic_conversations_method_host_path"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, db.IngestionLogs, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("ingestion_logs_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
+		},
+		{
+			Keys:    bson.D{{Key: "status", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("ingestion_logs_status_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	return createIndexes(ctx, db.IngestDeadLetters, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("ingest_dead_letters_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
+		},
+		{
+			Keys:    bson.D{{Key: "reason", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("ingest_dead_letters_reason_created_at"),
+		},
+	})
+}
+
+func createIndexes(ctx context.Context, collection *mongo.Collection, indexes []mongo.IndexModel) error {
+	if collection == nil || len(indexes) == 0 {
+		return nil
+	}
+	_, err := collection.Indexes().CreateMany(ctx, indexes)
 	return err
 }

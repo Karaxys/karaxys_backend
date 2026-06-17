@@ -15,9 +15,22 @@ import (
 )
 
 const DefaultMaxBodyBytes = 5 * 1024 * 1024
+const payloadExcerptMaxBytes = 8 * 1024
 
 type LogStore interface {
 	SaveLog(core.TrafficLog) error
+}
+
+type ConversationStore interface {
+	SaveConversation(core.TrafficConversation) error
+}
+
+type IngestionRecorder interface {
+	SaveIngestionLog(core.IngestionLog) error
+}
+
+type DeadLetterStore interface {
+	SaveIngestDeadLetter(core.IngestDeadLetter) error
 }
 
 type Analyzer interface {
@@ -74,10 +87,8 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
 
-	var conversation contracts.HTTPConversation
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&conversation); err != nil {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
@@ -86,12 +97,10 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	var extra json.RawMessage
-	if err := decoder.Decode(&extra); err != io.EOF {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-	if err := contracts.ValidateHTTPConversation(conversation); err != nil {
+
+	conversation, err := contracts.DecodeAndValidateHTTPConversation(raw)
+	if err != nil {
+		s.recordDeadLetter("invalid_conversation_contract", raw, r)
 		http.Error(w, "Invalid conversation contract", http.StatusBadRequest)
 		return
 	}
@@ -99,6 +108,7 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 	logEntry := ConversationToTrafficLog(conversation)
 	if err := s.Store.SaveLog(logEntry); err != nil {
 		if errors.Is(err, core.ErrTrafficLogDropped) {
+			s.recordIngestionLog("dropped", conversation, "traffic log dropped by retention or noise policy")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(Response{
@@ -107,12 +117,23 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		s.recordIngestionLog("failed", conversation, err.Error())
+		s.recordDeadLetter("traffic_log_persist_failed", raw, r)
 		http.Error(w, "Failed to persist conversation", http.StatusInternalServerError)
 		return
+	}
+	if conversationStore, ok := s.Store.(ConversationStore); ok {
+		if err := conversationStore.SaveConversation(ConversationToTrafficConversation(conversation)); err != nil {
+			s.recordIngestionLog("failed", conversation, err.Error())
+			s.recordDeadLetter("traffic_conversation_persist_failed", raw, r)
+			http.Error(w, "Failed to persist conversation", http.StatusInternalServerError)
+			return
+		}
 	}
 	if s.Analyzer != nil {
 		s.Analyzer.ProcessLog(logEntry)
 	}
+	s.recordIngestionLog("accepted", conversation, "")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -138,6 +159,33 @@ func ConversationToTrafficLog(conversation contracts.HTTPConversation) core.Traf
 		RespStatus:    conversation.HTTP.Response.Status,
 		RespBody:      conversation.HTTP.Response.Body,
 		Tags:          []string{"capture_source:" + conversation.CaptureSource},
+	}
+}
+
+func ConversationToTrafficConversation(conversation contracts.HTTPConversation) core.TrafficConversation {
+	respStatusCode := 0
+	if conversation.HTTP.Response.StatusCode != nil {
+		respStatusCode = *conversation.HTTP.Response.StatusCode
+	}
+	return core.TrafficConversation{
+		ConversationID: conversation.ID.OID,
+		SchemaVersion:  conversation.SchemaVersion,
+		TenantID:       conversation.TenantID,
+		ProjectID:      conversation.ProjectID,
+		AgentID:        conversation.AgentID,
+		CaptureSource:  conversation.CaptureSource,
+		CaptureMode:    conversation.CaptureMode,
+		CapturedAt:     conversation.CapturedAt.Date,
+		Method:         conversation.HTTP.Request.Method,
+		URL:            conversation.HTTP.Request.URL,
+		Host:           conversation.HTTP.Request.Host,
+		Path:           analyzerPath(conversation.HTTP.Request),
+		ReqHeaders:     conversation.HTTP.Request.Headers,
+		ReqBody:        conversation.HTTP.Request.Body,
+		RespStatus:     conversation.HTTP.Response.Status,
+		RespStatusCode: respStatusCode,
+		RespHeaders:    conversation.HTTP.Response.Headers,
+		RespBody:       conversation.HTTP.Response.Body,
 	}
 }
 
@@ -178,4 +226,48 @@ func analyzerPath(request contracts.HTTPRequest) string {
 		return parsed.Path
 	}
 	return request.Path
+}
+
+func (s *Service) recordIngestionLog(status string, conversation contracts.HTTPConversation, message string) {
+	recorder, ok := s.Store.(IngestionRecorder)
+	if !ok {
+		return
+	}
+	_ = recorder.SaveIngestionLog(core.IngestionLog{
+		Status:         status,
+		SchemaVersion:  conversation.SchemaVersion,
+		CaptureSource:  conversation.CaptureSource,
+		AgentID:        conversation.AgentID,
+		ConversationID: conversation.ID.OID,
+		Method:         conversation.HTTP.Request.Method,
+		Host:           conversation.HTTP.Request.Host,
+		Path:           analyzerPath(conversation.HTTP.Request),
+		Message:        message,
+	})
+}
+
+func (s *Service) recordDeadLetter(reason string, raw []byte, r *http.Request) {
+	store, ok := s.Store.(DeadLetterStore)
+	if !ok {
+		return
+	}
+	var envelope struct {
+		SchemaVersion string `json:"schema_version"`
+		AgentID       string `json:"agent_id"`
+	}
+	_ = json.Unmarshal(raw, &envelope)
+	_ = store.SaveIngestDeadLetter(core.IngestDeadLetter{
+		Reason:         reason,
+		SchemaVersion:  envelope.SchemaVersion,
+		AgentID:        envelope.AgentID,
+		RemoteAddr:     r.RemoteAddr,
+		PayloadExcerpt: payloadExcerpt(raw),
+	})
+}
+
+func payloadExcerpt(raw []byte) string {
+	if len(raw) <= payloadExcerptMaxBytes {
+		return strings.ToValidUTF8(string(raw), ".")
+	}
+	return strings.ToValidUTF8(string(raw[:payloadExcerptMaxBytes]), ".")
 }

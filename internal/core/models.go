@@ -28,6 +28,53 @@ type TrafficLog struct {
 	Tags          []string            `bson:"tags"`
 }
 
+type TrafficConversation struct {
+	ID             primitive.ObjectID  `bson:"_id,omitempty" json:"id,omitempty"`
+	ConversationID string              `bson:"conversation_id" json:"conversation_id"`
+	SchemaVersion  string              `bson:"schema_version" json:"schema_version"`
+	TenantID       string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID      string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	AgentID        string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	CaptureSource  string              `bson:"capture_source" json:"capture_source"`
+	CaptureMode    string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
+	CapturedAt     time.Time           `bson:"captured_at" json:"captured_at"`
+	Method         string              `bson:"method" json:"method"`
+	URL            string              `bson:"url" json:"url"`
+	Host           string              `bson:"host" json:"host"`
+	Path           string              `bson:"path" json:"path"`
+	ReqHeaders     map[string][]string `bson:"req_headers,omitempty" json:"req_headers,omitempty"`
+	ReqBody        string              `bson:"req_body,omitempty" json:"req_body,omitempty"`
+	RespStatus     string              `bson:"resp_status" json:"resp_status"`
+	RespStatusCode int                 `bson:"resp_status_code,omitempty" json:"resp_status_code,omitempty"`
+	RespHeaders    map[string][]string `bson:"resp_headers,omitempty" json:"resp_headers,omitempty"`
+	RespBody       string              `bson:"resp_body,omitempty" json:"resp_body,omitempty"`
+	CreatedAt      time.Time           `bson:"created_at" json:"created_at"`
+}
+
+type IngestionLog struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	Status         string             `bson:"status" json:"status"`
+	SchemaVersion  string             `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
+	CaptureSource  string             `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
+	AgentID        string             `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	ConversationID string             `bson:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	Method         string             `bson:"method,omitempty" json:"method,omitempty"`
+	Host           string             `bson:"host,omitempty" json:"host,omitempty"`
+	Path           string             `bson:"path,omitempty" json:"path,omitempty"`
+	Message        string             `bson:"message,omitempty" json:"message,omitempty"`
+}
+
+type IngestDeadLetter struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	Reason         string             `bson:"reason" json:"reason"`
+	SchemaVersion  string             `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
+	AgentID        string             `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	RemoteAddr     string             `bson:"remote_addr,omitempty" json:"remote_addr,omitempty"`
+	PayloadExcerpt string             `bson:"payload_excerpt,omitempty" json:"payload_excerpt,omitempty"`
+}
+
 type ApiInventory struct {
 	ID             primitive.ObjectID  `bson:"_id,omitempty"`
 	Method         string              `bson:"method"`

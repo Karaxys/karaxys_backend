@@ -33,6 +33,12 @@ func TestHandleConversationAcceptsValidConversation(t *testing.T) {
 	if len(store.logs) != 1 {
 		t.Fatalf("expected one saved log, got %d", len(store.logs))
 	}
+	if len(store.conversations) != 1 {
+		t.Fatalf("expected one saved conversation, got %d", len(store.conversations))
+	}
+	if len(store.ingestionLogs) != 1 {
+		t.Fatalf("expected one ingestion log, got %d", len(store.ingestionLogs))
+	}
 	if analyzer.count != 1 {
 		t.Fatalf("expected analyzer to run once, got %d", analyzer.count)
 	}
@@ -46,6 +52,16 @@ func TestHandleConversationAcceptsValidConversation(t *testing.T) {
 	}
 	if saved.Method != http.MethodGet || saved.Host != "api.example.local" || saved.Path != "/api/v1/users" {
 		t.Fatalf("unexpected request mapping: %+v", saved)
+	}
+	savedConversation := store.conversations[0]
+	if savedConversation.ConversationID != "6650f8cb1c5e7c6c1f93a111" {
+		t.Fatalf("unexpected conversation id: %s", savedConversation.ConversationID)
+	}
+	if savedConversation.RespStatus != "200 OK" || savedConversation.RespStatusCode != 200 {
+		t.Fatalf("unexpected response mapping: %+v", savedConversation)
+	}
+	if store.ingestionLogs[0].Status != "accepted" {
+		t.Fatalf("unexpected ingestion log: %+v", store.ingestionLogs[0])
 	}
 
 	var response Response
@@ -106,6 +122,9 @@ func TestHandleConversationRejectsInvalidContract(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if len(service.Store.(*fakeStore).deadLetters) != 1 {
+		t.Fatalf("expected one dead letter, got %d", len(service.Store.(*fakeStore).deadLetters))
+	}
 }
 
 func TestHandleConversationRejectsOversizedBody(t *testing.T) {
@@ -163,11 +182,21 @@ func TestHandleConversationDoesNotAnalyzeDroppedLogs(t *testing.T) {
 	if response.Status != "dropped" {
 		t.Fatalf("unexpected response status: %s", response.Status)
 	}
+	if len(store.ingestionLogs) != 1 || store.ingestionLogs[0].Status != "dropped" {
+		t.Fatalf("expected dropped ingestion log, got %+v", store.ingestionLogs)
+	}
+	if len(store.conversations) != 0 {
+		t.Fatalf("expected no saved conversation for dropped log, got %d", len(store.conversations))
+	}
 }
 
 type fakeStore struct {
-	logs []core.TrafficLog
-	err  error
+	logs            []core.TrafficLog
+	conversations   []core.TrafficConversation
+	ingestionLogs   []core.IngestionLog
+	deadLetters     []core.IngestDeadLetter
+	err             error
+	conversationErr error
 }
 
 func (f *fakeStore) SaveLog(logEntry core.TrafficLog) error {
@@ -175,6 +204,24 @@ func (f *fakeStore) SaveLog(logEntry core.TrafficLog) error {
 		return f.err
 	}
 	f.logs = append(f.logs, logEntry)
+	return nil
+}
+
+func (f *fakeStore) SaveConversation(conversation core.TrafficConversation) error {
+	if f.conversationErr != nil {
+		return f.conversationErr
+	}
+	f.conversations = append(f.conversations, conversation)
+	return nil
+}
+
+func (f *fakeStore) SaveIngestionLog(logEntry core.IngestionLog) error {
+	f.ingestionLogs = append(f.ingestionLogs, logEntry)
+	return nil
+}
+
+func (f *fakeStore) SaveIngestDeadLetter(deadLetter core.IngestDeadLetter) error {
+	f.deadLetters = append(f.deadLetters, deadLetter)
 	return nil
 }
 

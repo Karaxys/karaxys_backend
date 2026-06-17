@@ -92,6 +92,32 @@ func TestHTTPConversationRejectsInvalidObjectID(t *testing.T) {
 	}
 }
 
+func TestDecodeAndValidateHTTPConversationAcceptsSchemaValidExample(t *testing.T) {
+	raw := loadExampleRaw(t, "http.conversation.v1.example.json")
+
+	conversation, err := DecodeAndValidateHTTPConversation(raw)
+	if err != nil {
+		t.Fatalf("expected example to pass schema validation: %v", err)
+	}
+	if conversation.SchemaVersion != SchemaHTTPConversationV1 {
+		t.Fatalf("unexpected schema version: %s", conversation.SchemaVersion)
+	}
+}
+
+func TestDecodeAndValidateHTTPConversationRejectsSchemaViolation(t *testing.T) {
+	var conversation HTTPConversation
+	loadExample(t, "http.conversation.v1.example.json", &conversation)
+	conversation.HTTP.Request.Method = "get"
+	raw, err := json.Marshal(conversation)
+	if err != nil {
+		t.Fatalf("encode invalid conversation: %v", err)
+	}
+
+	if _, err := DecodeAndValidateHTTPConversation(raw); err == nil {
+		t.Fatal("expected schema validation to reject lowercase method")
+	}
+}
+
 func TestScanJobRequiresSecretReference(t *testing.T) {
 	var job ScanJob
 	loadExample(t, "scan.job.v1.example.json", &job)
@@ -117,12 +143,19 @@ func TestScanResultRejectsInvalidDigest(t *testing.T) {
 func loadExample(t *testing.T, name string, target any) {
 	t.Helper()
 
+	raw := loadExampleRaw(t, name)
+	if err := json.Unmarshal(raw, target); err != nil {
+		t.Fatalf("decode example %s: %v", name, err)
+	}
+}
+
+func loadExampleRaw(t *testing.T, name string) []byte {
+	t.Helper()
+
 	path := filepath.Join("..", "..", "contracts", "examples", name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read example %s: %v", name, err)
 	}
-	if err := json.Unmarshal(raw, target); err != nil {
-		t.Fatalf("decode example %s: %v", name, err)
-	}
+	return raw
 }
