@@ -138,11 +138,42 @@ func TestHandleConversationRejectsNonJSONContentType(t *testing.T) {
 	}
 }
 
+func TestHandleConversationDoesNotAnalyzeDroppedLogs(t *testing.T) {
+	store := &fakeStore{err: core.ErrTrafficLogDropped}
+	analyzer := &fakeAnalyzer{}
+	service := NewService(store, analyzer, "agent-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/conversations", bytes.NewReader(loadExample(t)))
+	req.Header.Set("Authorization", "Bearer agent-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	service.HandleConversation(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if analyzer.count != 0 {
+		t.Fatalf("expected analyzer not to run for dropped logs, got %d", analyzer.count)
+	}
+	var response Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "dropped" {
+		t.Fatalf("unexpected response status: %s", response.Status)
+	}
+}
+
 type fakeStore struct {
 	logs []core.TrafficLog
+	err  error
 }
 
 func (f *fakeStore) SaveLog(logEntry core.TrafficLog) error {
+	if f.err != nil {
+		return f.err
+	}
 	f.logs = append(f.logs, logEntry)
 	return nil
 }

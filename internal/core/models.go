@@ -1,9 +1,12 @@
 package core
 
 import (
+	"errors"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"time"
 )
+
+var ErrTrafficLogDropped = errors.New("traffic log dropped by retention policy")
 
 type TrafficLog struct {
 	ID            primitive.ObjectID  `bson:"_id,omitempty"`

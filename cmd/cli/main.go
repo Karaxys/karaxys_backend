@@ -19,7 +19,10 @@ func main() {
 		log.Fatalf("Error loading config: %v", err)
 	}
 
-	database, err := db.Connect(cfg.MongoURI, cfg.MongoDBName)
+	database, err := db.Connect(cfg.MongoURI, cfg.MongoDBName, db.LogRetention{
+		MaxEvents: cfg.TrafficLogMaxEvents,
+		TTL:       cfg.TrafficLogTTL,
+	})
 	if err != nil {
 		log.Fatalf("Error connecting to DB: %v", err)
 	}

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -31,6 +32,9 @@ type PaginatedResponse struct {
 func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if ShouldDropTrafficLog(logEntry) {
+		return core.ErrTrafficLogDropped
+	}
 	if logEntry.ID.IsZero() {
 		logEntry.ID = primitive.NewObjectID()
 	}
@@ -42,7 +46,49 @@ func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 		log.Printf("Failed to save log entry: %v\n", err)
 		return err
 	}
+	if err := db.PruneTrafficLogs(ctx); err != nil && !errors.Is(err, core.ErrTrafficLogDropped) {
+		log.Printf("Failed to prune traffic logs: %v\n", err)
+	}
 	return nil
+}
+
+func (db *DB) PruneTrafficLogs(ctx context.Context) error {
+	retention := normalizeLogRetention(db.LogRetention)
+	if retention.MaxEvents <= 0 {
+		return nil
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(retention.MaxEvents).
+		SetProjection(bson.M{"_id": 1}).
+		SetLimit(1000)
+
+	cursor, err := db.Logs.Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	var ids []primitive.ObjectID
+	for cursor.Next(ctx) {
+		var item struct {
+			ID primitive.ObjectID `bson:"_id"`
+		}
+		if err := cursor.Decode(&item); err != nil {
+			return err
+		}
+		ids = append(ids, item.ID)
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	_, err = db.Logs.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	return err
 }
 
 func (db *DB) GetInventory(p Pagination) (*PaginatedResponse, error) {

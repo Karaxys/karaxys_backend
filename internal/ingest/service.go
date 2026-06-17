@@ -98,6 +98,15 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 
 	logEntry := ConversationToTrafficLog(conversation)
 	if err := s.Store.SaveLog(logEntry); err != nil {
+		if errors.Is(err, core.ErrTrafficLogDropped) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(Response{
+				Status:        "dropped",
+				SchemaVersion: conversation.SchemaVersion,
+			})
+			return
+		}
 		http.Error(w, "Failed to persist conversation", http.StatusInternalServerError)
 		return
 	}
