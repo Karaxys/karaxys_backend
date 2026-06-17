@@ -54,3 +54,19 @@ func TestLoadConfigParsesRetentionOverrides(t *testing.T) {
 		t.Fatalf("unexpected TTL: %s", cfg.TrafficLogTTL)
 	}
 }
+
+func TestLoadDatabaseConfigDoesNotRequireProxySettings(t *testing.T) {
+	t.Setenv("MONGO_URI", "")
+	t.Setenv("MONGO_DB_NAME", "")
+	t.Setenv("PROXY_ADDR", "")
+	t.Setenv("PROXY_CERT_FILE", "")
+	t.Setenv("PROXY_KEY_FILE", "")
+
+	cfg, err := LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("LoadDatabaseConfig returned error: %v", err)
+	}
+	if cfg.MongoURI != defaultMongoURI {
+		t.Fatalf("unexpected MongoURI: %s", cfg.MongoURI)
+	}
+}

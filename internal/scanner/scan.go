@@ -6,6 +6,7 @@ import (
 	nuclei "github.com/projectdiscovery/nuclei/v3/lib"
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 	"karaxys_backend/internal/contracts"
+	"karaxys_backend/internal/core"
 	"log"
 	"net/url"
 	"os"
@@ -23,7 +24,7 @@ func NewScanner() *Scanner {
 	return &Scanner{}
 }
 
-func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
+func (s *Scanner) ExecuteScan(config core.ScanConfig) ([]core.ScanExecutionResult, error) {
 	log.Printf("Starting %s Scan on %s %s", config.TestType, config.Method, config.Path)
 	yamlContent, err := GetTemplate(config.TestType)
 	if err != nil {
@@ -57,7 +58,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 		return nil, fmt.Errorf("failed to init nuclei engine: %v", err)
 	}
 	defer ne.Close()
-	var results []ScanResult
+	var results []core.ScanExecutionResult
 	var mu sync.Mutex
 
 	onResult := func(event *output.ResultEvent) {
@@ -100,7 +101,7 @@ func (s *Scanner) ExecuteScan(config ScanConfig) ([]ScanResult, error) {
 			}
 		}
 
-		res := ScanResult{
+		res := core.ScanExecutionResult{
 			SchemaVersion:  contracts.SchemaScanResultV1,
 			TestType:       config.TestType,
 			Vulnerable:     isVuln,

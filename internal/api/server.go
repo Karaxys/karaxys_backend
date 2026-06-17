@@ -3,27 +3,24 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"karaxys_backend/internal/analyzer"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/ingest"
-	"karaxys_backend/internal/scanner"
+	"karaxys_backend/internal/scanplan"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Server struct {
-	DB      *db.DB
-	Scanner *scanner.Scanner
-	DBName  string
-	Ingest  *ingest.Service
+	DB     *db.DB
+	DBName string
+	Ingest *ingest.Service
 }
 
 func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Server {
@@ -36,10 +33,9 @@ func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Ser
 	}
 
 	return &Server{
-		DB:      db,
-		Scanner: scanner.NewScanner(),
-		DBName:  dbName,
-		Ingest:  ingest.NewService(db, processor, os.Getenv("KARAXYS_AGENT_TOKEN")),
+		DB:     db,
+		DBName: dbName,
+		Ingest: ingest.NewService(db, processor, os.Getenv("KARAXYS_AGENT_TOKEN")),
 	}
 }
 
@@ -47,6 +43,7 @@ func (s *Server) Start() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
+	mux.HandleFunc("GET /scan-jobs/{id}", s.handleGetScanJob)
 	mux.HandleFunc("GET /scan-results", s.handleGetScanResults)
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
@@ -94,6 +91,15 @@ type ScanRequest struct {
 	AttackMethod  string `json:"attack_method"`
 }
 
+type ScanJobResponse struct {
+	JobID        string `json:"job_id"`
+	Status       string `json:"status"`
+	InventoryID  string `json:"inventory_id"`
+	TestType     string `json:"test_type"`
+	Error        string `json:"error,omitempty"`
+	ResultsCount int    `json:"results_count,omitempty"`
+}
+
 func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	var req ScanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -119,7 +125,7 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := scanner.BuildScanConfig(
+	config, err := scanplan.BuildScanConfig(
 		target.BaseURL,
 		&target,
 		req.AttackerToken,
@@ -127,35 +133,56 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		req.TestType,
 	)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Config Error: %v", err), 400)
+		http.Error(w, "Config Error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Scan Triggered: %s on %s", req.TestType, target.PathPattern)
-	results, err := s.Scanner.ExecuteScan(config)
+	job, err := s.DB.CreateScanJob(core.ScanJob{
+		InventoryID:  target.ID,
+		Status:       core.ScanJobStatusQueued,
+		TestType:     req.TestType,
+		AttackMethod: req.AttackMethod,
+		Config:       config,
+	})
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Scan Failed: %v", err), 500)
+		http.Error(w, "Failed to enqueue scan job", http.StatusInternalServerError)
 		return
 	}
 
-	for _, res := range results {
-		logEntry := core.ScanResult{
-			SchemaVersion:  res.SchemaVersion,
-			InventoryID:    target.ID,
-			TestType:       res.TestType,
-			Vulnerable:     res.Vulnerable,
-			Severity:       res.Severity,
-			Description:    res.Description,
-			Proof:          res.Proof,
-			ResponseStatus: res.ResponseStatus,
-			ResponseBody:   res.ResponseBody,
-			CreatedAt:      time.Now(),
-		}
-		s.DB.SaveScanResult(logEntry)
-	}
+	log.Printf("Scan queued: job=%s test=%s target=%s", job.ID.Hex(), req.TestType, target.PathPattern)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(ScanJobResponse{
+		JobID:        job.ID.Hex(),
+		Status:       job.Status,
+		InventoryID:  target.ID.Hex(),
+		TestType:     job.TestType,
+		ResultsCount: job.ResultsCount,
+	})
+}
+
+func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	objID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		http.Error(w, "Invalid scan job ID", http.StatusBadRequest)
+		return
+	}
+	job, err := s.DB.GetScanJob(objID)
+	if err != nil {
+		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(ScanJobResponse{
+		JobID:        job.ID.Hex(),
+		Status:       job.Status,
+		InventoryID:  job.InventoryID.Hex(),
+		TestType:     job.TestType,
+		Error:        job.Error,
+		ResultsCount: job.ResultsCount,
+	})
 }
 
 func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +192,7 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 	sortBy := r.URL.Query().Get("sort_by")
 	sortOrder := r.URL.Query().Get("sort_order")
 	inventoryIDStr := r.URL.Query().Get("inventory_id")
+	jobIDStr := r.URL.Query().Get("job_id")
 
 	var inventoryID *primitive.ObjectID
 	if inventoryIDStr != "" {
@@ -175,6 +203,15 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 		}
 		inventoryID = &objID
 	}
+	var jobID *primitive.ObjectID
+	if jobIDStr != "" {
+		objID, err := primitive.ObjectIDFromHex(jobIDStr)
+		if err != nil {
+			http.Error(w, "Invalid job_id", http.StatusBadRequest)
+			return
+		}
+		jobID = &objID
+	}
 
 	results, err := s.DB.GetScanResults(db.Pagination{
 		Page:      page,
@@ -182,7 +219,7 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 		Offset:    offset,
 		SortBy:    sortBy,
 		SortOrder: sortOrder,
-	}, inventoryID)
+	}, inventoryID, jobID)
 	if err != nil {
 		http.Error(w, "Database Error", http.StatusInternalServerError)
 		return

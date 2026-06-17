@@ -94,6 +94,7 @@ type ApiInventory struct {
 
 type ScanResult struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty"`
+	JobID          primitive.ObjectID `bson:"job_id,omitempty" json:"job_id,omitempty"`
 	SchemaVersion  string             `bson:"schema_version" json:"schema_version"`
 	InventoryID    primitive.ObjectID `bson:"inventory_id"`
 	TestType       string             `bson:"test_type"`
@@ -104,4 +105,53 @@ type ScanResult struct {
 	ResponseStatus int                `bson:"response_status"`
 	ResponseBody   string             `bson:"response_body"`
 	CreatedAt      time.Time          `bson:"created_at"`
+}
+
+const (
+	ScanJobStatusQueued    = "queued"
+	ScanJobStatusRunning   = "running"
+	ScanJobStatusCompleted = "completed"
+	ScanJobStatusFailed    = "failed"
+)
+
+type ScanConfig struct {
+	TargetURL    string            `bson:"target_url" json:"target_url"`
+	Method       string            `bson:"method" json:"method"`
+	Path         string            `bson:"path" json:"path"`
+	Body         string            `bson:"body,omitempty" json:"body,omitempty"`
+	Headers      map[string]string `bson:"headers,omitempty" json:"headers,omitempty"`
+	TestType     string            `bson:"test_type" json:"test_type"`
+	ManualAuth   string            `bson:"manual_auth,omitempty" json:"manual_auth,omitempty"`
+	AttackMethod string            `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
+	PollutedBody string            `bson:"polluted_body,omitempty" json:"polluted_body,omitempty"`
+}
+
+type ScanExecutionResult struct {
+	SchemaVersion  string    `json:"schema_version"`
+	TestType       string    `json:"test_type"`
+	Vulnerable     bool      `json:"vulnerable"`
+	Severity       string    `json:"severity"`
+	Description    string    `json:"description"`
+	ResponseStatus int       `json:"response_status"`
+	ResponseBody   string    `json:"response_body"`
+	ResponseHeader string    `json:"response_headers,omitempty"`
+	Proof          string    `json:"proof"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
+type ScanJob struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	InventoryID  primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
+	Status       string             `bson:"status" json:"status"`
+	TestType     string             `bson:"test_type" json:"test_type"`
+	AttackMethod string             `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
+	Config       ScanConfig         `bson:"config" json:"config"`
+	Error        string             `bson:"error,omitempty" json:"error,omitempty"`
+	WorkerID     string             `bson:"worker_id,omitempty" json:"worker_id,omitempty"`
+	Attempts     int                `bson:"attempts" json:"attempts"`
+	ResultsCount int                `bson:"results_count" json:"results_count"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt    time.Time          `bson:"updated_at" json:"updated_at"`
+	StartedAt    time.Time          `bson:"started_at,omitempty" json:"started_at,omitempty"`
+	CompletedAt  time.Time          `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 }

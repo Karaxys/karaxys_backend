@@ -5,6 +5,7 @@ import (
 	"errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"karaxys_backend/internal/core"
 	"log"
@@ -97,6 +98,90 @@ func (db *DB) SaveIngestDeadLetter(deadLetter core.IngestDeadLetter) error {
 	if err != nil {
 		log.Printf("Failed to save ingest dead letter: %v\n", err)
 	}
+	return err
+}
+
+func (db *DB) CreateScanJob(job core.ScanJob) (core.ScanJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	if job.ID.IsZero() {
+		job.ID = primitive.NewObjectID()
+	}
+	if job.Status == "" {
+		job.Status = core.ScanJobStatusQueued
+	}
+	if job.CreatedAt.IsZero() {
+		job.CreatedAt = now
+	}
+	job.UpdatedAt = now
+	_, err := db.ScanJobs.InsertOne(ctx, job)
+	return job, err
+}
+
+func (db *DB) GetScanJob(id primitive.ObjectID) (*core.ScanJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var job core.ScanJob
+	if err := db.ScanJobs.FindOne(ctx, bson.M{"_id": id}).Decode(&job); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (db *DB) ClaimNextScanJob(workerID string) (*core.ScanJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	opts := options.FindOneAndUpdate().
+		SetSort(bson.D{{Key: "created_at", Value: 1}}).
+		SetReturnDocument(options.After)
+	update := bson.M{
+		"$set": bson.M{
+			"status":     core.ScanJobStatusRunning,
+			"worker_id":  workerID,
+			"started_at": now,
+			"updated_at": now,
+			"error":      "",
+		},
+		"$inc": bson.M{"attempts": 1},
+	}
+
+	var job core.ScanJob
+	err := db.ScanJobs.FindOneAndUpdate(ctx, bson.M{"status": core.ScanJobStatusQueued}, update, opts).Decode(&job)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (db *DB) CompleteScanJob(id primitive.ObjectID, resultsCount int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	_, err := db.ScanJobs.UpdateByID(ctx, id, bson.M{"$set": bson.M{
+		"status":        core.ScanJobStatusCompleted,
+		"results_count": resultsCount,
+		"completed_at":  now,
+		"updated_at":    now,
+		"error":         "",
+	}})
+	return err
+}
+
+func (db *DB) FailScanJob(id primitive.ObjectID, message string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	_, err := db.ScanJobs.UpdateByID(ctx, id, bson.M{"$set": bson.M{
+		"status":       core.ScanJobStatusFailed,
+		"error":        message,
+		"completed_at": now,
+		"updated_at":   now,
+	}})
 	return err
 }
 
@@ -220,12 +305,17 @@ func (db *DB) SaveScanResult(scanRes core.ScanResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	coll := db.Client.Database(db.Name).Collection("scan_results")
-	_, err := coll.InsertOne(ctx, scanRes)
+	if scanRes.ID.IsZero() {
+		scanRes.ID = primitive.NewObjectID()
+	}
+	if scanRes.CreatedAt.IsZero() {
+		scanRes.CreatedAt = time.Now().UTC()
+	}
+	_, err := db.ScanResults.InsertOne(ctx, scanRes)
 	return err
 }
 
-func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID) (*PaginatedResponse, error) {
+func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID) (*PaginatedResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -249,9 +339,11 @@ func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID) (*Pa
 	if inventoryID != nil {
 		filter["inventory_id"] = *inventoryID
 	}
+	if jobID != nil {
+		filter["job_id"] = *jobID
+	}
 
-	coll := db.Client.Database(db.Name).Collection("scan_results")
-	total, err := coll.CountDocuments(ctx, filter)
+	total, err := db.ScanResults.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +353,7 @@ func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID) (*Pa
 		SetSkip(int64(p.Offset)).
 		SetSort(bson.D{{Key: sanitizeScanResultSortField(p.SortBy), Value: sanitizeSortOrder(p.SortOrder)}})
 
-	cursor, err := coll.Find(ctx, filter, opts)
+	cursor, err := db.ScanResults.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}

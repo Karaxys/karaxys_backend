@@ -1,11 +1,11 @@
-package scanner
-import(
+package scanplan
+
+import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"strings"
 	"karaxys_backend/internal/core"
+	"strings"
 )
 
 const (
@@ -19,6 +19,49 @@ const (
 	testOpenRedirect           = "OPEN_REDIRECT"
 	testExposedMetrics         = "EXPOSED_METRICS"
 )
+
+func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManualToken string, reqMethod string, testType string) (core.ScanConfig, error) {
+	tokenToUse, err := resolveAuthToken(testType, inventory, reqManualToken)
+	if err != nil {
+		return core.ScanConfig{}, err
+	}
+
+	methodToUse := resolveMethod(testType, inventory.Method, reqMethod)
+	targetPath := resolvePath(testType, inventory.OriginalPath, methodToUse)
+	bodyToUse := resolveBody(testType, methodToUse, inventory.SampleReqBody)
+	flatHeaders := flattenHeaders(inventory.SampleHeaders)
+
+	pollutedBody := ""
+	if testType == testBOLAParameterPollution {
+		pollutedBody, err = buildPollutedBody(inventory.SampleReqBody)
+		if err != nil {
+			return core.ScanConfig{}, err
+		}
+	}
+	if testType == testOpenRedirect {
+		targetPath = applyOpenRedirect(targetPath)
+	}
+
+	return core.ScanConfig{
+		TargetURL:    targetBaseURL,
+		Method:       inventory.Method,
+		Path:         targetPath,
+		Body:         bodyToUse,
+		PollutedBody: pollutedBody,
+		Headers:      flatHeaders,
+		TestType:     testType,
+		ManualAuth:   tokenToUse,
+		AttackMethod: methodToUse,
+	}, nil
+}
+
+func splitAuthHeader(originalAuthHeader string) (string, string) {
+	parts := strings.Split(originalAuthHeader, " ")
+	if len(parts) == 2 {
+		return parts[0] + " ", parts[1]
+	}
+	return "", originalAuthHeader
+}
 
 func forgeNoneToken(originalAuthHeader string) (string, error) {
 	prefix, token := splitAuthHeader(originalAuthHeader)
@@ -40,7 +83,7 @@ func forgeNoneToken(originalAuthHeader string) (string, error) {
 	newHeaderBytes, _ := json.Marshal(headerMap)
 	newHeaderStr := base64.RawURLEncoding.EncodeToString(newHeaderBytes)
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(jwtParts[1])
-	if err != nil{
+	if err != nil {
 		return "", fmt.Errorf("failed to decode payload: %v", err)
 	}
 	var payloadMap map[string]interface{}
@@ -69,55 +112,12 @@ func tamperSignature(originalAuthHeader string) (string, error) {
 	return fmt.Sprintf("%s%s.%s.%s", prefix, jwtParts[0], jwtParts[1], newSig), nil
 }
 
-func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManualToken string, reqMethod string, testType string) (ScanConfig, error) {
-	tokenToUse, err := resolveAuthToken(testType, inventory, reqManualToken)
-	if err != nil {
-		return ScanConfig{}, err
-	}
-
-	methodToUse := resolveMethod(testType, inventory.Method, reqMethod)
-	targetPath := resolvePath(testType, inventory.OriginalPath, methodToUse)
-	bodyToUse := resolveBody(testType, methodToUse, inventory.SampleReqBody)
-	flatHeaders := flattenHeaders(inventory.SampleHeaders)
-
-	pollutedBody := ""
-	if testType == testBOLAParameterPollution {
-		pollutedBody, err = buildPollutedBody(inventory.SampleReqBody)
-		if err != nil {
-			return ScanConfig{}, err
-		}
-	}
-	if testType == testOpenRedirect {
-		targetPath = applyOpenRedirect(targetPath)
-	}
-
-	return ScanConfig{
-		TargetURL:    targetBaseURL,
-		Method:       inventory.Method,
-		Path:         targetPath,
-		Body:         bodyToUse,
-		PollutedBody: pollutedBody,
-		Headers:      flatHeaders,
-		TestType:     testType,
-		ManualAuth:   tokenToUse,
-		AttackMethod: methodToUse,
-	}, nil
-}
-
-func splitAuthHeader(originalAuthHeader string) (string, string) {
-	parts := strings.Split(originalAuthHeader, " ")
-	if len(parts) == 2 {
-		return parts[0] + " ", parts[1]
-	}
-	return "", originalAuthHeader
-}
-
 func resolveAuthToken(testType string, inventory *core.ApiInventory, reqManualToken string) (string, error) {
 	switch testType {
 	case testBOLA, testBOLAParameterPollution:
 		token := pickToken(reqManualToken, inventory, 1)
 		if token == "" {
-			return "", fmt.Errorf("BOLA requires an Attacker Token. Provide one in request or capture a second user.")
+			return "", fmt.Errorf("BOLA requires an attacker token")
 		}
 		return token, nil
 	case testBrokenUserAuth:
@@ -241,7 +241,7 @@ func buildPollutedBody(originalBody string) (string, error) {
 	}
 
 	if targetParam == "" {
-		return "", fmt.Errorf("BOLA_PARAMETER_POLLUTION failed: No pollutable parameter (BasketId/UserId) found in body")
+		return "", fmt.Errorf("BOLA_PARAMETER_POLLUTION failed: no pollutable parameter found in body")
 	}
 
 	oldPairStr := fmt.Sprintf("\"%s\":\"%s\"", targetParam, attackerValue)
@@ -260,53 +260,10 @@ func buildPollutedBody(originalBody string) (string, error) {
 	return fmt.Sprintf("%s, \"%s\":\"%s\"}", trimmed, targetParam, victimValue), nil
 }
 
-func applyOpenRedirect(targetPath string) string {
-	u, err := url.Parse(targetPath)
-	if err != nil {
-		return targetPath
+func applyOpenRedirect(originalPath string) string {
+	separator := "?"
+	if strings.Contains(originalPath, "?") {
+		separator = "&"
 	}
-
-	q := u.Query()
-	redirectParams := []string{
-		"to", "next", "url", "target", "r", "redirect", "redirect_to",
-		"return", "return_to", "dest", "destination", "go", "goto",
-		"link", "image_url", "forward", "out", "view",
-	}
-
-	foundParam := false
-	for paramName, values := range q {
-		lowerParam := strings.ToLower(paramName)
-		isTarget := false
-		for _, target := range redirectParams {
-			if strings.Contains(lowerParam, target) {
-				isTarget = true
-				break
-			}
-		}
-		if !isTarget && len(values) > 0 {
-			if strings.HasPrefix(values[0], "/") || strings.HasPrefix(values[0], "http") {
-				isTarget = true
-			}
-		}
-
-		if isTarget {
-			q.Set(paramName, "http://evil.com")
-			foundParam = true
-		}
-	}
-
-	if foundParam {
-		u.RawQuery = q.Encode()
-		return u.String()
-	}
-
-	var queryParts []string
-	for _, p := range redirectParams {
-		queryParts = append(queryParts, fmt.Sprintf("%s=http://evil.com", p))
-	}
-	sprayQuery := strings.Join(queryParts, "&")
-	if strings.Contains(targetPath, "?") {
-		return targetPath + "&" + sprayQuery
-	}
-	return targetPath + "?" + sprayQuery
+	return originalPath + separator + "redirect=https://evil.example"
 }

@@ -23,6 +23,8 @@ type DB struct {
 	TrafficConversations *mongo.Collection
 	IngestionLogs        *mongo.Collection
 	IngestDeadLetters    *mongo.Collection
+	ScanJobs             *mongo.Collection
+	ScanResults          *mongo.Collection
 	LogRetention         LogRetention
 }
 
@@ -73,6 +75,8 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		TrafficConversations: mongoDB.Collection("traffic_conversations"),
 		IngestionLogs:        mongoDB.Collection("ingestion_logs"),
 		IngestDeadLetters:    mongoDB.Collection("ingest_dead_letters"),
+		ScanJobs:             mongoDB.Collection("scan_jobs"),
+		ScanResults:          mongoDB.Collection("scan_results"),
 		LogRetention:         retention,
 	}
 	if err := database.EnsureIndexes(ctx); err != nil {
@@ -152,7 +156,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	return createIndexes(ctx, db.IngestDeadLetters, []mongo.IndexModel{
+	if err := createIndexes(ctx, db.IngestDeadLetters, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "created_at", Value: 1}},
 			Options: options.Index().SetName("ingest_dead_letters_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
@@ -160,6 +164,32 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "reason", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("ingest_dead_letters_reason_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, db.ScanJobs, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "status", Value: 1}, {Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("scan_jobs_status_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_jobs_inventory_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	return createIndexes(ctx, db.ScanResults, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "job_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_results_job_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_results_inventory_created_at"),
 		},
 	})
 }
