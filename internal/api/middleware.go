@@ -20,6 +20,17 @@ const DefaultMaxWriteBodyBytes int64 = 1 * 1024 * 1024
 type contextKey string
 
 const subjectContextKey contextKey = "karaxys_subject"
+const principalContextKey contextKey = "karaxys_principal"
+
+type Principal struct {
+	Subject   string
+	ActorType string
+	UserID    string
+	AccountID string
+	Role      string
+}
+
+type SessionAuthenticator func(token string) (*Principal, bool)
 
 type Middleware struct {
 	mu                sync.Mutex
@@ -28,6 +39,7 @@ type Middleware struct {
 	burst             int
 	lastCleanup       time.Time
 	apiKey            string
+	sessionAuth       SessionAuthenticator
 	allowedOrigins    map[string]struct{}
 	maxWriteBodyBytes int64
 }
@@ -39,6 +51,7 @@ type clientLimiter struct {
 
 type MiddlewareOptions struct {
 	APIKey            string
+	SessionAuth       SessionAuthenticator
 	AllowedOrigins    []string
 	MaxWriteBodyBytes int64
 }
@@ -64,6 +77,7 @@ func NewMiddleware(rps float64, burst int, options ...MiddlewareOptions) *Middle
 		burst:             burst,
 		lastCleanup:       time.Now(),
 		apiKey:            strings.TrimSpace(opts.APIKey),
+		sessionAuth:       opts.SessionAuth,
 		allowedOrigins:    originSet(opts.AllowedOrigins),
 		maxWriteBodyBytes: opts.MaxWriteBodyBytes,
 	}
@@ -80,13 +94,8 @@ func (m *Middleware) Logger(next http.Handler) http.Handler {
 
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || isIngestionPath(r.URL.Path) {
+		if r.Method == http.MethodOptions || isExemptPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
-			return
-		}
-
-		if m.apiKey == "" {
-			http.Error(w, "API authentication is not configured", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -94,12 +103,38 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		if token == "" {
 			token = r.Header.Get("X-API-Key")
 		}
+		if token == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		if m.sessionAuth != nil {
+			if principal, ok := m.sessionAuth(token); ok && principal != nil {
+				if principal.Subject == "" {
+					principal.Subject = "user:" + principal.UserID
+				}
+				ctx := context.WithValue(r.Context(), subjectContextKey, principal.Subject)
+				ctx = context.WithValue(ctx, principalContextKey, *principal)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		if m.apiKey == "" {
+			http.Error(w, "API authentication is not configured", http.StatusServiceUnavailable)
+			return
+		}
 		if token == "" || !constantTimeEqual(token, m.apiKey) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), subjectContextKey, subjectFromToken(token))
+		principal := Principal{
+			Subject:   subjectFromToken(token),
+			ActorType: "api_key",
+		}
+		ctx := context.WithValue(r.Context(), subjectContextKey, principal.Subject)
+		ctx = context.WithValue(ctx, principalContextKey, principal)
 		r = r.WithContext(ctx)
 		next.ServeHTTP(w, r)
 	})
@@ -144,6 +179,7 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == "OPTIONS" {
@@ -266,6 +302,25 @@ func SubjectFromContext(ctx context.Context) string {
 		return subject
 	}
 	return ""
+}
+
+func PrincipalFromContext(ctx context.Context) (Principal, bool) {
+	if principal, ok := ctx.Value(principalContextKey).(Principal); ok {
+		return principal, true
+	}
+	return Principal{}, false
+}
+
+func isExemptPath(path string) bool {
+	if isIngestionPath(path) {
+		return true
+	}
+	switch path {
+	case "/auth/signup", "/auth/login", "/auth/refresh", "/agents/register":
+		return true
+	default:
+		return false
+	}
 }
 
 func isIngestionPath(path string) bool {

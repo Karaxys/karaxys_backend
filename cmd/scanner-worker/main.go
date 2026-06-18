@@ -88,6 +88,8 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string) (bool
 
 	for _, res := range results {
 		if err := database.SaveScanResult(core.ScanResult{
+			TenantID:       job.TenantID,
+			ProjectID:      job.ProjectID,
 			JobID:          job.ID,
 			SchemaVersion:  res.SchemaVersion,
 			InventoryID:    job.InventoryID,

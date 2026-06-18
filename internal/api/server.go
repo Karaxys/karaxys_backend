@@ -46,6 +46,17 @@ func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Ser
 
 func (s *Server) Start() {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/signup", s.handleSignup)
+	mux.HandleFunc("POST /auth/login", s.handleLogin)
+	mux.HandleFunc("POST /auth/refresh", s.handleRefresh)
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /auth/me", s.handleMe)
+	mux.HandleFunc("GET /quick-start", s.handleQuickStartState)
+	mux.HandleFunc("POST /api/fetchQuickStartPageState", s.handleQuickStartState)
+	mux.HandleFunc("GET /data-sources", s.handleListDataSources)
+	mux.HandleFunc("POST /data-sources", s.handleCreateDataSource)
+	mux.HandleFunc("POST /agent-enrollments", s.handleCreateAgentEnrollment)
+	mux.HandleFunc("POST /agents/register", s.handleRegisterAgent)
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
 	mux.HandleFunc("GET /scan-jobs/{id}", s.handleGetScanJob)
@@ -53,16 +64,20 @@ func (s *Server) Start() {
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
 
-	mw := NewMiddleware(50, 100, middlewareOptionsFromEnv())
+	if s.Ingest != nil {
+		s.Ingest.AgentAuthenticator = s.authenticateAgentToken
+	}
+	mw := NewMiddleware(50, 100, s.middlewareOptionsFromEnv())
 	handler := mw.SecureHeaders(mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mw.LimitWriteBody(mux)))))))
 
 	log.Println("Backend running on http://localhost:8081")
 	log.Fatal(http.ListenAndServe(":8081", handler))
 }
 
-func middlewareOptionsFromEnv() MiddlewareOptions {
+func (s *Server) middlewareOptionsFromEnv() MiddlewareOptions {
 	return MiddlewareOptions{
 		APIKey:            os.Getenv("KARAXYS_API_KEY"),
+		SessionAuth:       s.authenticateSessionToken,
 		AllowedOrigins:    splitCSVEnv("KARAXYS_ALLOWED_ORIGINS", []string{"http://localhost:7000"}),
 		MaxWriteBodyBytes: int64EnvDefault("KARAXYS_MAX_WRITE_BYTES", DefaultMaxWriteBodyBytes),
 	}
@@ -113,13 +128,25 @@ func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	sortBy := r.URL.Query().Get("sort_by")
 	sortOrder := r.URL.Query().Get("sort_order")
-	results, err := s.DB.GetInventory(db.Pagination{
+	pagination := db.Pagination{
 		Page:      page,
 		Limit:     limit,
 		Offset:    offset,
 		SortBy:    sortBy,
 		SortOrder: sortOrder,
-	})
+	}
+	var results *db.PaginatedResponse
+	var err error
+	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.AccountID != "" && principal.ActorType == core.AuditActorUser {
+		accountID, parseErr := primitive.ObjectIDFromHex(principal.AccountID)
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		results, err = s.DB.GetInventoryForAccount(pagination, accountID)
+	} else {
+		results, err = s.DB.GetInventory(pagination)
+	}
 	if err != nil {
 		http.Error(w, "Database Error", 500)
 		return
@@ -164,7 +191,11 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var target core.ApiInventory
-	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&target)
+	filter := bson.M{"_id": objID}
+	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.AccountID != "" && principal.ActorType == core.AuditActorUser {
+		filter["tenant_id"] = principal.AccountID
+	}
+	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), filter).Decode(&target)
 	if err != nil {
 		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "endpoint not found")
 		http.Error(w, "Endpoint Not Found", 404)
@@ -203,6 +234,8 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 
 	job, err := s.DB.CreateScanJob(core.ScanJob{
 		ID:           jobID,
+		TenantID:     target.TenantID,
+		ProjectID:    target.ProjectID,
 		InventoryID:  target.ID,
 		Status:       core.ScanJobStatusQueued,
 		TestType:     req.TestType,
@@ -237,11 +270,18 @@ func (s *Server) auditScanCreate(r *http.Request, jobID string, req ScanRequest,
 		return
 	}
 	actorID := SubjectFromContext(r.Context())
+	actorType := core.AuditActorAPIKey
+	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.ActorType != "" {
+		actorType = principal.ActorType
+		if principal.UserID != "" {
+			actorID = principal.UserID
+		}
+	}
 	if actorID == "" {
 		actorID = "unknown"
 	}
 	if err := s.DB.SaveAuditLog(core.AuditLog{
-		ActorType:    core.AuditActorAPIKey,
+		ActorType:    actorType,
 		ActorID:      actorID,
 		Action:       core.AuditActionScanCreate,
 		ResourceType: "scan_job",
@@ -309,6 +349,10 @@ func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
 		return
 	}
+	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.ActorType == core.AuditActorUser && principal.AccountID != "" && job.TenantID != principal.AccountID {
+		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ScanJobResponse{
 		JobID:        job.ID.Hex(),
@@ -348,13 +392,25 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 		jobID = &objID
 	}
 
-	results, err := s.DB.GetScanResults(db.Pagination{
+	pagination := db.Pagination{
 		Page:      page,
 		Limit:     limit,
 		Offset:    offset,
 		SortBy:    sortBy,
 		SortOrder: sortOrder,
-	}, inventoryID, jobID)
+	}
+	var results *db.PaginatedResponse
+	var err error
+	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.ActorType == core.AuditActorUser && principal.AccountID != "" {
+		accountID, parseErr := primitive.ObjectIDFromHex(principal.AccountID)
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		results, err = s.DB.GetScanResultsForAccount(pagination, inventoryID, jobID, accountID)
+	} else {
+		results, err = s.DB.GetScanResults(pagination, inventoryID, jobID)
+	}
 	if err != nil {
 		http.Error(w, "Database Error", http.StatusInternalServerError)
 		return
@@ -372,7 +428,11 @@ func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var target core.ApiInventory
-	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&target)
+	filter := bson.M{"_id": objID}
+	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.AccountID != "" && principal.ActorType == core.AuditActorUser {
+		filter["tenant_id"] = principal.AccountID
+	}
+	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), filter).Decode(&target)
 	if err != nil {
 		http.Error(w, "Endpoint Not Found", 404)
 		return

@@ -236,6 +236,9 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 		"path_pattern": pathPattern,
 		"base_url":     baseURL,
 	}
+	if logEntry.TenantID != "" {
+		filter["tenant_id"] = logEntry.TenantID
+	}
 
 	update := bson.M{
 		"$setOnInsert": bson.M{
@@ -253,6 +256,18 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 		"$addToSet": bson.M{
 			"sensitive_data": bson.M{"$each": finalPII},
 		},
+	}
+	if logEntry.TenantID != "" {
+		update["$setOnInsert"].(bson.M)["tenant_id"] = logEntry.TenantID
+	}
+	if logEntry.ProjectID != "" {
+		update["$setOnInsert"].(bson.M)["project_id"] = logEntry.ProjectID
+	}
+	if logEntry.AgentID != "" {
+		update["$set"].(bson.M)["agent_id"] = logEntry.AgentID
+	}
+	if logEntry.CaptureSource != "" {
+		update["$set"].(bson.M)["capture_source"] = logEntry.CaptureSource
 	}
 
 	for paramKey, paramValue := range params {

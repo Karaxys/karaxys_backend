@@ -53,7 +53,7 @@ func ValidateProductionEnvironment(service string) error {
 	var required []string
 	switch service {
 	case ServiceAPIServer:
-		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_API_KEY", "KARAXYS_AGENT_TOKEN", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64"}
+		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64"}
 	case ServiceScannerWorker:
 		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_SECRET_KEY_B64"}
 	case ServiceLegacyProxy:

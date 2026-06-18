@@ -73,6 +73,83 @@ func TestHandleConversationAcceptsValidConversation(t *testing.T) {
 	}
 }
 
+func TestHandleConversationAcceptsDynamicAgentTokenAndBindsIdentity(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store, nil, "", func(token string) (*AgentAuth, bool) {
+		if token != "dynamic-agent-token" {
+			return nil, false
+		}
+		return &AgentAuth{
+			AgentID:  "registered-agent",
+			TenantID: "account-1",
+		}, true
+	})
+
+	var conversation contracts.HTTPConversation
+	if err := json.Unmarshal(loadExample(t), &conversation); err != nil {
+		t.Fatalf("decode example: %v", err)
+	}
+	conversation.AgentID = ""
+	body, err := json.Marshal(conversation)
+	if err != nil {
+		t.Fatalf("encode conversation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/conversations", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dynamic-agent-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	service.HandleConversation(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.logs) != 1 {
+		t.Fatalf("expected saved log")
+	}
+	if store.logs[0].AgentID != "registered-agent" || store.logs[0].TenantID != "account-1" {
+		t.Fatalf("identity was not bound from token: %+v", store.logs[0])
+	}
+}
+
+func TestHandleConversationRejectsAgentIdentityMismatch(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store, nil, "", func(token string) (*AgentAuth, bool) {
+		if token != "dynamic-agent-token" {
+			return nil, false
+		}
+		return &AgentAuth{AgentID: "registered-agent"}, true
+	})
+
+	var conversation contracts.HTTPConversation
+	if err := json.Unmarshal(loadExample(t), &conversation); err != nil {
+		t.Fatalf("decode example: %v", err)
+	}
+	conversation.AgentID = "spoofed-agent"
+	body, err := json.Marshal(conversation)
+	if err != nil {
+		t.Fatalf("encode conversation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/conversations", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dynamic-agent-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	service.HandleConversation(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.logs) != 0 {
+		t.Fatalf("expected no persisted logs on identity mismatch")
+	}
+	if len(store.deadLetters) != 1 || store.deadLetters[0].Reason != "agent_identity_mismatch" {
+		t.Fatalf("expected identity mismatch dead letter, got %+v", store.deadLetters)
+	}
+}
+
 func TestHandleConversationRedactsSecretsBeforePersistence(t *testing.T) {
 	store := &fakeStore{}
 	analyzer := &fakeAnalyzer{}

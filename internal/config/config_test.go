@@ -95,7 +95,7 @@ func TestValidateProductionEnvironmentRejectsMissingValues(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected production validation error")
 	}
-	for _, expected := range []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_API_KEY", "KARAXYS_AGENT_TOKEN", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64"} {
+	for _, expected := range []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("expected error to mention %s, got %v", expected, err)
 		}
@@ -108,6 +108,20 @@ func TestValidateProductionEnvironmentAcceptsCompleteAPIEnvironment(t *testing.T
 	t.Setenv("MONGO_DB_NAME", "karaxys")
 	t.Setenv("KARAXYS_API_KEY", "api-key-with-at-least-24-characters")
 	t.Setenv("KARAXYS_AGENT_TOKEN", "agent-token-with-at-least-24-chars")
+	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
+	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+
+	if err := ValidateProductionEnvironment(ServiceAPIServer); err != nil {
+		t.Fatalf("unexpected production validation error: %v", err)
+	}
+}
+
+func TestValidateProductionEnvironmentAcceptsSessionOnlyAPIEnvironment(t *testing.T) {
+	t.Setenv("KARAXYS_ENV", "production")
+	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
+	t.Setenv("MONGO_DB_NAME", "karaxys")
+	t.Setenv("KARAXYS_API_KEY", "")
+	t.Setenv("KARAXYS_AGENT_TOKEN", "")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
 

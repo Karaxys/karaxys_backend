@@ -28,6 +28,7 @@ func TestAuthenticateRejectsWhenAPIKeyNotConfigured(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/inventory", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
 
 	handler.ServeHTTP(rec, req)
 
@@ -64,6 +65,41 @@ func TestAuthenticateAcceptsAPIKeyAndBearerToken(t *testing.T) {
 	}
 }
 
+func TestAuthenticateAcceptsSessionToken(t *testing.T) {
+	mw := NewMiddleware(10, 10, MiddlewareOptions{
+		SessionAuth: func(token string) (*Principal, bool) {
+			if token != "session-token" {
+				return nil, false
+			}
+			return &Principal{
+				ActorType: "user",
+				UserID:    "user-1",
+				AccountID: "account-1",
+				Role:      "admin",
+			}, true
+		},
+	})
+	handler := mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok || principal.UserID != "user-1" || principal.AccountID != "account-1" {
+			t.Fatalf("expected user principal in context, got %+v", principal)
+		}
+		if SubjectFromContext(r.Context()) != "user:user-1" {
+			t.Fatalf("unexpected subject: %s", SubjectFromContext(r.Context()))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/inventory", nil)
+	req.Header.Set("Authorization", "Bearer session-token")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuthenticateExemptsIngestionPath(t *testing.T) {
 	mw := NewMiddleware(10, 10, MiddlewareOptions{})
 	handler := mw.Authenticate(okHandler())
@@ -75,6 +111,20 @@ func TestAuthenticateExemptsIngestionPath(t *testing.T) {
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthenticateExemptsPublicAuthAndAgentRegistrationPaths(t *testing.T) {
+	mw := NewMiddleware(10, 10, MiddlewareOptions{})
+	handler := mw.Authenticate(okHandler())
+
+	for _, path := range []string{"/auth/signup", "/auth/login", "/auth/refresh", "/agents/register"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: unexpected status: got=%d body=%s", path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

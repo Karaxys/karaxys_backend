@@ -34,10 +34,14 @@ make mongo
 Start the API server only:
 
 ```sh
-KARAXYS_AGENT_TOKEN=dev-agent-token \
 KARAXYS_API_KEY=dev-api-key \
 make api
 ```
+
+`KARAXYS_API_KEY` is a compatibility key for local automation. The normal
+dashboard/product flow uses user sessions from `/auth/signup` and `/auth/login`.
+The normal eBPF flow uses per-agent tokens issued from enrollment tokens instead
+of a shared global `KARAXYS_AGENT_TOKEN`.
 
 Start the isolated Nuclei scanner worker:
 
@@ -67,14 +71,28 @@ claiming the job. Both API and scanner worker must use the same
 
 Useful endpoints:
 
+- `POST /auth/signup`
+- `POST /auth/login`
+- `POST /auth/refresh`
+- `POST /auth/logout`
+- `GET /auth/me`
+- `GET /quick-start`
+- `POST /data-sources`
+- `POST /agent-enrollments`
+- `POST /agents/register`
 - `POST /scan`
 - `GET /scan-jobs/{id}`
 - `GET /scan-results?job_id={id}`
 - `GET /scan-results?inventory_id={id}`
 
-Normal backend API endpoints require `X-API-Key` or `Authorization: Bearer` with
-`KARAXYS_API_KEY`. The eBPF ingestion endpoint is intentionally separate and
-continues to use `KARAXYS_AGENT_TOKEN`.
+Normal backend API endpoints require either:
+
+- `Authorization: Bearer <access_token>` from `/auth/signup` or `/auth/login`.
+- `X-API-Key: <KARAXYS_API_KEY>` for local automation compatibility.
+
+The eBPF ingestion endpoint is intentionally separate. It accepts per-agent
+tokens returned by `POST /agents/register`. `KARAXYS_AGENT_TOKEN` is still
+supported only as a local compatibility fallback.
 
 ## Security Baseline
 
@@ -108,8 +126,14 @@ does not need this key because it intentionally removes auth.
 
 Backend API security controls currently include:
 
-- API-key authentication for inventory and scan endpoints.
-- Separate agent-token authentication for `POST /v1/ingest/conversations`.
+- Email/password signup and login with access tokens and HttpOnly refresh-token
+  cookies.
+- Session authentication for dashboard/product APIs.
+- API-key compatibility for local automation.
+- Per-agent enrollment and token authentication for
+  `POST /v1/ingest/conversations`.
+- Account scoping for inventory, scan jobs, scan results, data sources, and
+  agent enrollment flows.
 - Configurable CORS through `KARAXYS_ALLOWED_ORIGINS`.
 - Secure response headers on API responses.
 - Write request body limiting through `KARAXYS_MAX_WRITE_BYTES`.
@@ -124,9 +148,9 @@ KARAXYS_ENV=production
 ```
 
 In production mode, backend entrypoints validate required secrets and refuse to
-start with missing placeholder values, weak API/agent tokens, localhost CORS
-origins, or an invalid scan secret key. The legacy proxy command also disables
-automatic Chrome launch in production mode.
+start with missing placeholder values, weak configured compatibility API/agent
+tokens, localhost CORS origins, or an invalid scan secret key. The legacy proxy
+command also disables automatic Chrome launch in production mode.
 
 ## End-To-End Local Workflow
 
@@ -145,7 +169,6 @@ Terminal 1: start MongoDB and the API server.
 ```sh
 cd /home/shion/Documents/Karaxys/karaxys_backend
 make mongo
-KARAXYS_AGENT_TOKEN=dev-agent-token \
 KARAXYS_API_KEY=dev-api-key \
 make api
 ```
@@ -166,17 +189,64 @@ Expected worker signal:
 
 - `Scanner worker started`
 
-Terminal 3: start the eBPF local VAmPI capture workflow and send normalized
-conversations to the backend.
+Terminal 3: create a user session, configure an eBPF data source, and generate
+an enrollment token.
+
+```sh
+cd /home/shion/Documents/Karaxys/karaxys_backend
+
+ACCESS_TOKEN="$(curl -s -X POST "http://127.0.0.1:8081/auth/signup" \
+  -H "Content-Type: application/json" \
+  -c /tmp/karaxys.cookies \
+  -d '{"email":"admin@karaxys.local","password":"change-me-now-123","account_name":"Karaxys Local"}' \
+  | jq -r '.access_token')"
+
+DATA_SOURCE_ID="$(curl -s -X POST "http://127.0.0.1:8081/data-sources" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"EBPF_LINUX","name":"Local VAmPI eBPF"}' \
+  | jq -r '.id')"
+
+ENROLLMENT_TOKEN="$(curl -s -X POST "http://127.0.0.1:8081/agent-enrollments" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"data_source_id\":\"${DATA_SOURCE_ID}\",\"name\":\"local-vampi-agent\",\"ttl_hours\":24}" \
+  | jq -r '.enrollment_token')"
+
+echo "${ENROLLMENT_TOKEN}"
+```
+
+If the user already exists, replace the signup command with login:
+
+```sh
+ACCESS_TOKEN="$(curl -s -X POST "http://127.0.0.1:8081/auth/login" \
+  -H "Content-Type: application/json" \
+  -c /tmp/karaxys.cookies \
+  -d '{"email":"admin@karaxys.local","password":"change-me-now-123"}' \
+  | jq -r '.access_token')"
+```
+
+Refresh a session using the HttpOnly refresh cookie:
+
+```sh
+ACCESS_TOKEN="$(curl -s -X POST "http://127.0.0.1:8081/auth/refresh" \
+  -b /tmp/karaxys.cookies \
+  -c /tmp/karaxys.cookies \
+  | jq -r '.access_token')"
+```
+
+Terminal 4: start the eBPF local VAmPI capture workflow and send normalized
+conversations to the backend. The script registers the agent with the enrollment
+token, receives a per-agent token, and starts the worker with that token.
 
 ```sh
 cd /home/shion/Documents/Karaxys/ebpf_tracer
 KARAXYS_BACKEND_URL=http://127.0.0.1:8081 \
-KARAXYS_AGENT_TOKEN=dev-agent-token \
+KARAXYS_ENROLLMENT_TOKEN="${ENROLLMENT_TOKEN}" \
 make local-vampi
 ```
 
-Terminal 4: generate sample API traffic.
+Terminal 5: generate sample API traffic.
 
 ```sh
 cd /home/shion/Documents/Karaxys/ebpf_tracer
@@ -193,7 +263,7 @@ Verify inventory from another shell:
 
 ```sh
 curl -s "http://127.0.0.1:8081/inventory?limit=50" \
-  -H "X-API-Key: dev-api-key" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   | jq
 ```
 
@@ -201,12 +271,12 @@ Pick the captured login endpoint and queue a broken-auth scan:
 
 ```sh
 INVENTORY_ID="$(curl -s "http://127.0.0.1:8081/inventory?limit=50" \
-  -H "X-API-Key: dev-api-key" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   | jq -r '.data[] | select(.PathPattern == "/users/{id}/login") | .ID' \
   | head -n 1)"
 
 JOB_ID="$(curl -s -X POST "http://127.0.0.1:8081/scan" \
-  -H "X-API-Key: dev-api-key" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "{\"inventory_id\":\"${INVENTORY_ID}\",\"test_type\":\"BROKEN_USER_AUTH\"}" \
   | jq -r '.job_id')"
@@ -218,11 +288,11 @@ Check job status and results:
 
 ```sh
 curl -s "http://127.0.0.1:8081/scan-jobs/${JOB_ID}" \
-  -H "X-API-Key: dev-api-key" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   | jq
 
 curl -s "http://127.0.0.1:8081/scan-results?job_id=${JOB_ID}" \
-  -H "X-API-Key: dev-api-key" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   | jq
 ```
 

@@ -30,6 +30,12 @@ type DB struct {
 	ScanResults          *mongo.Collection
 	ScanSecrets          *mongo.Collection
 	AuditLogs            *mongo.Collection
+	Accounts             *mongo.Collection
+	Users                *mongo.Collection
+	Sessions             *mongo.Collection
+	DataSources          *mongo.Collection
+	AgentEnrollments     *mongo.Collection
+	Agents               *mongo.Collection
 	LogRetention         LogRetention
 }
 
@@ -88,6 +94,12 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		ScanResults:          mongoDB.Collection("scan_results"),
 		ScanSecrets:          mongoDB.Collection("scan_secrets"),
 		AuditLogs:            mongoDB.Collection("audit_logs"),
+		Accounts:             mongoDB.Collection("accounts"),
+		Users:                mongoDB.Collection("users"),
+		Sessions:             mongoDB.Collection("sessions"),
+		DataSources:          mongoDB.Collection("data_sources"),
+		AgentEnrollments:     mongoDB.Collection("agent_enrollments"),
+		Agents:               mongoDB.Collection("agents"),
 		LogRetention:         retention,
 	}
 	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
@@ -191,6 +203,10 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_jobs_inventory_created_at"),
 		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_jobs_tenant_created_at"),
+		},
 	}); err != nil {
 		return err
 	}
@@ -217,11 +233,32 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_results_inventory_created_at"),
 		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_results_tenant_created_at"),
+		},
 	}); err != nil {
 		return err
 	}
 
-	return createIndexes(ctx, "audit_logs", db.AuditLogs, []mongo.IndexModel{
+	if err := createIndexes(ctx, "api_inventory", db.Client.Database(db.Name).Collection("api_inventory"), []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "updated_at", Value: -1}},
+			Options: options.Index().SetName("api_inventory_tenant_updated_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "method", Value: 1}, {Key: "base_url", Value: 1}, {Key: "path_pattern", Value: 1}},
+			Options: options.Index().SetName("api_inventory_tenant_endpoint"),
+		},
+		{
+			Keys:    bson.D{{Key: "capture_source", Value: 1}, {Key: "updated_at", Value: -1}},
+			Options: options.Index().SetName("api_inventory_capture_source_updated_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "audit_logs", db.AuditLogs, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("audit_logs_created_at"),
@@ -233,6 +270,96 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "action", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("audit_logs_action_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "accounts", db.Accounts, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "slug", Value: 1}},
+			Options: options.Index().SetName("accounts_slug_unique").SetUnique(true),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "users", db.Users, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "email", Value: 1}},
+			Options: options.Index().SetName("users_email_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "account_id", Value: 1}, {Key: "role", Value: 1}},
+			Options: options.Index().SetName("users_account_role"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "sessions", db.Sessions, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "access_token_hash", Value: 1}},
+			Options: options.Index().SetName("sessions_access_token_hash_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "refresh_token_hash", Value: 1}},
+			Options: options.Index().SetName("sessions_refresh_token_hash_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "refresh_expires_at", Value: 1}},
+			Options: options.Index().SetName("sessions_refresh_expires_at_ttl").SetExpireAfterSeconds(0),
+		},
+		{
+			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("sessions_user_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "data_sources", db.DataSources, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "account_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("data_sources_account_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "account_id", Value: 1}, {Key: "type", Value: 1}},
+			Options: options.Index().SetName("data_sources_account_type"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "agent_enrollments", db.AgentEnrollments, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "token_hash", Value: 1}},
+			Options: options.Index().SetName("agent_enrollments_token_hash_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("agent_enrollments_expires_at_ttl").SetExpireAfterSeconds(0),
+		},
+		{
+			Keys:    bson.D{{Key: "account_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("agent_enrollments_account_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	return createIndexes(ctx, "agents", db.Agents, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "token_hash", Value: 1}},
+			Options: options.Index().SetName("agents_token_hash_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "account_id", Value: 1}, {Key: "status", Value: 1}},
+			Options: options.Index().SetName("agents_account_status"),
+		},
+		{
+			Keys:    bson.D{{Key: "data_source_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("agents_data_source_created_at"),
 		},
 	})
 }

@@ -38,11 +38,21 @@ type Analyzer interface {
 	ProcessLog(core.TrafficLog)
 }
 
+type AgentAuth struct {
+	AgentID      string
+	TenantID     string
+	ProjectID    string
+	DataSourceID string
+}
+
+type AgentAuthenticator func(token string) (*AgentAuth, bool)
+
 type Service struct {
-	Store        LogStore
-	Analyzer     Analyzer
-	AgentToken   string
-	MaxBodyBytes int64
+	Store              LogStore
+	Analyzer           Analyzer
+	AgentToken         string
+	AgentAuthenticator AgentAuthenticator
+	MaxBodyBytes       int64
 }
 
 type Response struct {
@@ -50,12 +60,17 @@ type Response struct {
 	SchemaVersion string `json:"schema_version"`
 }
 
-func NewService(store LogStore, analyzer Analyzer, agentToken string) *Service {
+func NewService(store LogStore, analyzer Analyzer, agentToken string, authenticators ...AgentAuthenticator) *Service {
+	var authenticator AgentAuthenticator
+	if len(authenticators) > 0 {
+		authenticator = authenticators[0]
+	}
 	return &Service{
-		Store:        store,
-		Analyzer:     analyzer,
-		AgentToken:   agentToken,
-		MaxBodyBytes: DefaultMaxBodyBytes,
+		Store:              store,
+		Analyzer:           analyzer,
+		AgentToken:         strings.TrimSpace(agentToken),
+		AgentAuthenticator: authenticator,
+		MaxBodyBytes:       DefaultMaxBodyBytes,
 	}
 }
 
@@ -64,11 +79,12 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.AgentToken == "" {
+	if s.AgentToken == "" && s.AgentAuthenticator == nil {
 		http.Error(w, "Ingestion disabled", http.StatusServiceUnavailable)
 		return
 	}
-	if !s.authorized(r) {
+	agentAuth := s.authorize(r)
+	if agentAuth == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -103,6 +119,11 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.recordDeadLetter("invalid_conversation_contract", raw, r)
 		http.Error(w, "Invalid conversation contract", http.StatusBadRequest)
+		return
+	}
+	if err := bindAgentIdentity(&conversation, agentAuth); err != nil {
+		s.recordDeadLetter("agent_identity_mismatch", raw, r)
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -149,6 +170,8 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 func ConversationToTrafficLog(conversation contracts.HTTPConversation) core.TrafficLog {
 	return core.TrafficLog{
 		SchemaVersion: conversation.SchemaVersion,
+		TenantID:      conversation.TenantID,
+		ProjectID:     conversation.ProjectID,
 		CaptureSource: conversation.CaptureSource,
 		CaptureMode:   conversation.CaptureMode,
 		AgentID:       conversation.AgentID,
@@ -192,17 +215,44 @@ func ConversationToTrafficConversation(conversation contracts.HTTPConversation) 
 	}
 }
 
-func (s *Service) authorized(r *http.Request) bool {
+func bindAgentIdentity(conversation *contracts.HTTPConversation, auth *AgentAuth) error {
+	if conversation == nil || auth == nil || auth.AgentID == "" {
+		return nil
+	}
+	if conversation.AgentID != "" && conversation.AgentID != auth.AgentID {
+		return errors.New("agent identity mismatch")
+	}
+	conversation.AgentID = auth.AgentID
+	if auth.TenantID != "" {
+		conversation.TenantID = auth.TenantID
+	}
+	if auth.ProjectID != "" {
+		conversation.ProjectID = auth.ProjectID
+	}
+	return nil
+}
+
+func (s *Service) authorize(r *http.Request) *AgentAuth {
 	token := bearerToken(r.Header.Get("Authorization"))
 	if token == "" {
 		token = r.Header.Get("X-API-Key")
 	}
 	if token == "" {
-		return false
+		return nil
 	}
-	tokenHash := sha256.Sum256([]byte(token))
-	expectedHash := sha256.Sum256([]byte(s.AgentToken))
-	return subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) == 1
+	if s.AgentToken != "" {
+		tokenHash := sha256.Sum256([]byte(token))
+		expectedHash := sha256.Sum256([]byte(s.AgentToken))
+		if subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) == 1 {
+			return &AgentAuth{}
+		}
+	}
+	if s.AgentAuthenticator != nil {
+		if auth, ok := s.AgentAuthenticator(token); ok {
+			return auth
+		}
+	}
+	return nil
 }
 
 func bearerToken(header string) string {

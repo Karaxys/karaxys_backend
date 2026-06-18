@@ -245,6 +245,17 @@ func (db *DB) PruneTrafficLogs(ctx context.Context) error {
 }
 
 func (db *DB) GetInventory(p Pagination) (*PaginatedResponse, error) {
+	return db.getInventory(p, bson.M{})
+}
+
+func (db *DB) GetInventoryForAccount(p Pagination, accountID primitive.ObjectID) (*PaginatedResponse, error) {
+	if accountID.IsZero() {
+		return db.getInventory(p, bson.M{})
+	}
+	return db.getInventory(p, bson.M{"tenant_id": accountID.Hex()})
+}
+
+func (db *DB) getInventory(p Pagination, filter bson.M) (*PaginatedResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -265,7 +276,7 @@ func (db *DB) GetInventory(p Pagination) (*PaginatedResponse, error) {
 	}
 
 	coll := db.Client.Database(db.Name).Collection("api_inventory")
-	total, err := coll.CountDocuments(ctx, bson.M{})
+	total, err := coll.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +286,7 @@ func (db *DB) GetInventory(p Pagination) (*PaginatedResponse, error) {
 		SetSkip(int64(p.Offset)).
 		SetSort(bson.D{{Key: sanitizeSortField(p.SortBy), Value: sanitizeSortOrder(p.SortOrder)}})
 
-	cursor, err := coll.Find(ctx, bson.M{}, opts)
+	cursor, err := coll.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +348,17 @@ func (db *DB) SaveScanResult(scanRes core.ScanResult) error {
 }
 
 func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID) (*PaginatedResponse, error) {
+	return db.getScanResults(p, inventoryID, jobID, "")
+}
+
+func (db *DB) GetScanResultsForAccount(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, accountID primitive.ObjectID) (*PaginatedResponse, error) {
+	if accountID.IsZero() {
+		return db.getScanResults(p, inventoryID, jobID, "")
+	}
+	return db.getScanResults(p, inventoryID, jobID, accountID.Hex())
+}
+
+func (db *DB) getScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, tenantID string) (*PaginatedResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -357,6 +379,9 @@ func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID, jobI
 	}
 
 	filter := bson.M{}
+	if tenantID != "" {
+		filter["tenant_id"] = tenantID
+	}
 	if inventoryID != nil {
 		filter["inventory_id"] = *inventoryID
 	}

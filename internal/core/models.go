@@ -11,6 +11,8 @@ var ErrTrafficLogDropped = errors.New("traffic log dropped by retention policy")
 type TrafficLog struct {
 	ID            primitive.ObjectID  `bson:"_id,omitempty"`
 	SchemaVersion string              `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
+	TenantID      string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID     string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	CaptureSource string              `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
 	CaptureMode   string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
 	AgentID       string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
@@ -76,10 +78,19 @@ type IngestDeadLetter struct {
 }
 
 const (
-	AuditActorAPIKey      = "api_key"
-	AuditActionScanCreate = "scan.create"
-	AuditStatusSuccess    = "success"
-	AuditStatusFailure    = "failure"
+	AuditActorAPIKey                 = "api_key"
+	AuditActorUser                   = "user"
+	AuditActorAgent                  = "agent"
+	AuditActionLogin                 = "auth.login"
+	AuditActionSignup                = "auth.signup"
+	AuditActionLogout                = "auth.logout"
+	AuditActionSessionRefresh        = "auth.refresh"
+	AuditActionScanCreate            = "scan.create"
+	AuditActionDataSourceCreate      = "data_source.create"
+	AuditActionAgentEnrollmentCreate = "agent_enrollment.create"
+	AuditActionAgentRegister         = "agent.register"
+	AuditStatusSuccess               = "success"
+	AuditStatusFailure               = "failure"
 )
 
 type AuditLog struct {
@@ -109,8 +120,106 @@ type ScanSecret struct {
 	ExpiresAt  time.Time          `bson:"expires_at" json:"expires_at"`
 }
 
+const (
+	UserRoleAdmin    = "admin"
+	UserRoleAnalyst  = "analyst"
+	UserRoleScanner  = "scanner"
+	UserRoleReadOnly = "read_only"
+	UserRoleAgent    = "agent"
+)
+
+type Account struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Name      string             `bson:"name" json:"name"`
+	Slug      string             `bson:"slug" json:"slug"`
+	CreatedBy primitive.ObjectID `bson:"created_by,omitempty" json:"created_by,omitempty"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+type User struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Email        string             `bson:"email" json:"email"`
+	Name         string             `bson:"name,omitempty" json:"name,omitempty"`
+	PasswordHash string             `bson:"password_hash,omitempty" json:"-"`
+	AccountID    primitive.ObjectID `bson:"account_id" json:"account_id"`
+	Role         string             `bson:"role" json:"role"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt    time.Time          `bson:"updated_at" json:"updated_at"`
+	LastLoginAt  time.Time          `bson:"last_login_at,omitempty" json:"last_login_at,omitempty"`
+}
+
+type Session struct {
+	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	UserID           primitive.ObjectID `bson:"user_id" json:"user_id"`
+	AccountID        primitive.ObjectID `bson:"account_id" json:"account_id"`
+	AccessTokenHash  string             `bson:"access_token_hash" json:"-"`
+	RefreshTokenHash string             `bson:"refresh_token_hash" json:"-"`
+	UserAgent        string             `bson:"user_agent,omitempty" json:"user_agent,omitempty"`
+	RemoteAddr       string             `bson:"remote_addr,omitempty" json:"remote_addr,omitempty"`
+	CreatedAt        time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt        time.Time          `bson:"updated_at" json:"updated_at"`
+	AccessExpiresAt  time.Time          `bson:"access_expires_at" json:"access_expires_at"`
+	RefreshExpiresAt time.Time          `bson:"refresh_expires_at" json:"refresh_expires_at"`
+	RevokedAt        time.Time          `bson:"revoked_at,omitempty" json:"revoked_at,omitempty"`
+}
+
+const (
+	DataSourceTypeActiveURL      = "ACTIVE_URL"
+	DataSourceTypeEBPFLinux      = "EBPF_LINUX"
+	DataSourceTypeEBPFKubernetes = "EBPF_KUBERNETES"
+	DataSourceTypeOpenAPI        = "OPENAPI"
+	DataSourceTypePostman        = "POSTMAN"
+	DataSourceTypeHAR            = "HAR"
+
+	DataSourceStatusPending   = "pending"
+	DataSourceStatusConnected = "connected"
+)
+
+type DataSource struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	AccountID primitive.ObjectID `bson:"account_id" json:"account_id"`
+	Type      string             `bson:"type" json:"type"`
+	Name      string             `bson:"name" json:"name"`
+	Status    string             `bson:"status" json:"status"`
+	TargetURL string             `bson:"target_url,omitempty" json:"target_url,omitempty"`
+	Config    map[string]string  `bson:"config,omitempty" json:"config,omitempty"`
+	CreatedBy primitive.ObjectID `bson:"created_by,omitempty" json:"created_by,omitempty"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+type AgentEnrollment struct {
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	AccountID         primitive.ObjectID `bson:"account_id" json:"account_id"`
+	DataSourceID      primitive.ObjectID `bson:"data_source_id" json:"data_source_id"`
+	TokenHash         string             `bson:"token_hash" json:"-"`
+	Name              string             `bson:"name,omitempty" json:"name,omitempty"`
+	CreatedBy         primitive.ObjectID `bson:"created_by,omitempty" json:"created_by,omitempty"`
+	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
+	ExpiresAt         time.Time          `bson:"expires_at" json:"expires_at"`
+	UsedAt            time.Time          `bson:"used_at,omitempty" json:"used_at,omitempty"`
+	RegisteredAgentID primitive.ObjectID `bson:"registered_agent_id,omitempty" json:"registered_agent_id,omitempty"`
+}
+
+type Agent struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	AccountID    primitive.ObjectID `bson:"account_id" json:"account_id"`
+	DataSourceID primitive.ObjectID `bson:"data_source_id" json:"data_source_id"`
+	Name         string             `bson:"name" json:"name"`
+	TokenHash    string             `bson:"token_hash" json:"-"`
+	Status       string             `bson:"status" json:"status"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt    time.Time          `bson:"updated_at" json:"updated_at"`
+	LastSeenAt   time.Time          `bson:"last_seen_at,omitempty" json:"last_seen_at,omitempty"`
+}
+
 type ApiInventory struct {
 	ID             primitive.ObjectID  `bson:"_id,omitempty"`
+	TenantID       string              `bson:"tenant_id,omitempty"`
+	ProjectID      string              `bson:"project_id,omitempty"`
+	AgentID        string              `bson:"agent_id,omitempty"`
+	CaptureSource  string              `bson:"capture_source,omitempty"`
 	Method         string              `bson:"method"`
 	BaseURL        string              `bson:"base_url"`
 	PathPattern    string              `bson:"path_pattern"`
@@ -128,6 +237,8 @@ type ApiInventory struct {
 
 type ScanResult struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty"`
+	TenantID       string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID      string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	JobID          primitive.ObjectID `bson:"job_id,omitempty" json:"job_id,omitempty"`
 	SchemaVersion  string             `bson:"schema_version" json:"schema_version"`
 	InventoryID    primitive.ObjectID `bson:"inventory_id"`
@@ -176,6 +287,8 @@ type ScanExecutionResult struct {
 
 type ScanJob struct {
 	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	TenantID     string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID    string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	InventoryID  primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
 	Status       string             `bson:"status" json:"status"`
 	TestType     string             `bson:"test_type" json:"test_type"`
