@@ -64,6 +64,26 @@ Useful endpoints:
 - `GET /scan-results?job_id={id}`
 - `GET /scan-results?inventory_id={id}`
 
+## Security Baseline
+
+Karaxys redacts common secrets before persistence in the current backend data
+paths:
+
+- request and response headers
+- request and response bodies
+- captured URLs
+- ingestion dead-letter excerpts
+- analyzer inventory samples
+- scan result descriptions, proof commands, and response evidence
+
+The redaction policy covers `Authorization`, `Cookie`, `Set-Cookie`,
+`X-API-Key`, token-like headers, bearer/basic credentials, JWTs, API key fields,
+password/secret fields, token query parameters, and AWS access key IDs.
+
+The analyzer may inspect raw in-memory events to classify sensitive data, but
+persisted samples are redacted. Auth material supplied to future auth-based scan
+jobs still needs a secret-reference model before public or production exposure.
+
 ## End-To-End Local Workflow
 
 Use this workflow to validate the current eBPF capture to backend ingestion to

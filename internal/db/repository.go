@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/security/redact"
 	"log"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type PaginatedResponse struct {
 func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	logEntry = redact.TrafficLog(logEntry)
 	if ShouldDropTrafficLog(logEntry) {
 		return core.ErrTrafficLogDropped
 	}
@@ -56,6 +58,7 @@ func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 func (db *DB) SaveConversation(conversation core.TrafficConversation) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	conversation = redact.TrafficConversation(conversation)
 	if conversation.ID.IsZero() {
 		conversation.ID = primitive.NewObjectID()
 	}
@@ -88,6 +91,7 @@ func (db *DB) SaveIngestionLog(logEntry core.IngestionLog) error {
 func (db *DB) SaveIngestDeadLetter(deadLetter core.IngestDeadLetter) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	deadLetter = redact.IngestDeadLetter(deadLetter)
 	if deadLetter.ID.IsZero() {
 		deadLetter.ID = primitive.NewObjectID()
 	}
@@ -304,6 +308,7 @@ func sanitizeSortOrder(order string) int {
 func (db *DB) SaveScanResult(scanRes core.ScanResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	scanRes = redact.ScanResult(scanRes)
 
 	if scanRes.ID.IsZero() {
 		scanRes.ID = primitive.NewObjectID()

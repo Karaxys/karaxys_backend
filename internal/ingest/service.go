@@ -12,6 +12,7 @@ import (
 
 	"karaxys_backend/internal/contracts"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/security/redact"
 )
 
 const DefaultMaxBodyBytes = 5 * 1024 * 1024
@@ -106,7 +107,8 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logEntry := ConversationToTrafficLog(conversation)
-	if err := s.Store.SaveLog(logEntry); err != nil {
+	persistedLogEntry := redact.TrafficLog(logEntry)
+	if err := s.Store.SaveLog(persistedLogEntry); err != nil {
 		if errors.Is(err, core.ErrTrafficLogDropped) {
 			s.recordIngestionLog("dropped", conversation, "traffic log dropped by retention or noise policy")
 			w.Header().Set("Content-Type", "application/json")
@@ -123,7 +125,8 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if conversationStore, ok := s.Store.(ConversationStore); ok {
-		if err := conversationStore.SaveConversation(ConversationToTrafficConversation(conversation)); err != nil {
+		persistedConversation := redact.TrafficConversation(ConversationToTrafficConversation(conversation))
+		if err := conversationStore.SaveConversation(persistedConversation); err != nil {
 			s.recordIngestionLog("failed", conversation, err.Error())
 			s.recordDeadLetter("traffic_conversation_persist_failed", raw, r)
 			http.Error(w, "Failed to persist conversation", http.StatusInternalServerError)
@@ -261,7 +264,7 @@ func (s *Service) recordDeadLetter(reason string, raw []byte, r *http.Request) {
 		SchemaVersion:  envelope.SchemaVersion,
 		AgentID:        envelope.AgentID,
 		RemoteAddr:     r.RemoteAddr,
-		PayloadExcerpt: payloadExcerpt(raw),
+		PayloadExcerpt: redact.Text(payloadExcerpt(raw)),
 	})
 }
 

@@ -1,16 +1,18 @@
 package analyzer
 
-import(
+import (
 	"context"
 	"karaxys_backend/internal/analyzer/cluster"
 	"karaxys_backend/internal/analyzer/pii"
 	"karaxys_backend/internal/analyzer/schema"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/security/redact"
 	"karaxys_backend/internal/utils"
 	"log"
 	"net/url"
 	"strings"
 	"time"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -197,6 +199,7 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 	pathPattern, params := e.ClusterTrie.InsertPath(logEntry.Path)
 	reqSchema := schema.Learn(logEntry.ReqBody)
 	baseURL := getBaseURL(logEntry.URL)
+	redactedLogEntry := redact.TrafficLog(logEntry)
 	detectedPII := []string{}
 	if !isStaticResource(logEntry.Path) {
 		for k, vals := range logEntry.ReqHeaders {
@@ -242,8 +245,8 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 		},
 		"$set": bson.M{
 			"updated_at":       time.Now(),
-			"sample_req_body":  logEntry.ReqBody,
-			"sample_resp_body": logEntry.RespBody,
+			"sample_req_body":  redactedLogEntry.ReqBody,
+			"sample_resp_body": redactedLogEntry.RespBody,
 			"schema_req":       reqSchema,
 			"risk_level":       calculatedRisk,
 		},
@@ -256,7 +259,7 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 		update["$addToSet"].(bson.M)["param_values."+paramKey] = paramValue
 	}
 
-	for k, v := range logEntry.ReqHeaders {
+	for k, v := range redactedLogEntry.ReqHeaders {
 		if len(v) > 0 {
 			update["$addToSet"].(bson.M)["sample_headers."+k] = v[0]
 		}

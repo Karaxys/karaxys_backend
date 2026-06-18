@@ -8,6 +8,7 @@ import (
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/proxy"
+	"karaxys_backend/internal/security/redact"
 	"karaxys_backend/internal/utils"
 	"log"
 	"time"
@@ -36,7 +37,7 @@ func main() {
 	go func() {
 		log.Println("Starting log processor...")
 		for logEntry := range trafficQueue {
-			err := database.SaveLog(logEntry)
+			err := database.SaveLog(redact.TrafficLog(logEntry))
 			if err == nil {
 				processor.ProcessLog(logEntry)
 			}
