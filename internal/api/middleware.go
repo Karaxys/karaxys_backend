@@ -1,20 +1,35 @@
 package api
-import(
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
 	"golang.org/x/time/rate"
 )
 
+const DefaultMaxWriteBodyBytes int64 = 1 * 1024 * 1024
+
+type contextKey string
+
+const subjectContextKey contextKey = "karaxys_subject"
+
 type Middleware struct {
-	mu          sync.Mutex
-	clients     map[string]*clientLimiter
-	rps         float64
-	burst       int
-	lastCleanup time.Time
+	mu                sync.Mutex
+	clients           map[string]*clientLimiter
+	rps               float64
+	burst             int
+	lastCleanup       time.Time
+	apiKey            string
+	allowedOrigins    map[string]struct{}
+	maxWriteBodyBytes int64
 }
 
 type clientLimiter struct {
@@ -22,12 +37,35 @@ type clientLimiter struct {
 	lastSeen time.Time
 }
 
-func NewMiddleware(rps float64, burst int) *Middleware {
+type MiddlewareOptions struct {
+	APIKey            string
+	AllowedOrigins    []string
+	MaxWriteBodyBytes int64
+}
+
+func NewMiddleware(rps float64, burst int, options ...MiddlewareOptions) *Middleware {
+	opts := MiddlewareOptions{
+		AllowedOrigins:    []string{"http://localhost:7000"},
+		MaxWriteBodyBytes: DefaultMaxWriteBodyBytes,
+	}
+	if len(options) > 0 {
+		opts = options[0]
+		if len(opts.AllowedOrigins) == 0 {
+			opts.AllowedOrigins = []string{"http://localhost:7000"}
+		}
+		if opts.MaxWriteBodyBytes <= 0 {
+			opts.MaxWriteBodyBytes = DefaultMaxWriteBodyBytes
+		}
+	}
+
 	return &Middleware{
-		clients:     make(map[string]*clientLimiter),
-		rps:         rps,
-		burst:       burst,
-		lastCleanup: time.Now(),
+		clients:           make(map[string]*clientLimiter),
+		rps:               rps,
+		burst:             burst,
+		lastCleanup:       time.Now(),
+		apiKey:            strings.TrimSpace(opts.APIKey),
+		allowedOrigins:    originSet(opts.AllowedOrigins),
+		maxWriteBodyBytes: opts.MaxWriteBodyBytes,
 	}
 }
 
@@ -42,10 +80,27 @@ func (m *Middleware) Logger(next http.Handler) http.Handler {
 
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "OPTIONS" {
+		if r.Method == http.MethodOptions || isIngestionPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
+
+		if m.apiKey == "" {
+			http.Error(w, "API authentication is not configured", http.StatusServiceUnavailable)
+			return
+		}
+
+		token := bearerToken(r.Header.Get("Authorization"))
+		if token == "" {
+			token = r.Header.Get("X-API-Key")
+		}
+		if token == "" || !constantTimeEqual(token, m.apiKey) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), subjectContextKey, subjectFromToken(token))
+		r = r.WithContext(ctx)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -56,7 +111,7 @@ func (m *Middleware) RateLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		limiter := m.getLimiter(clientID(r))
+		limiter := m.getLimiter(m.rateLimitKey(r))
 		if !limiter.Allow() {
 			http.Error(w, "Too Many Requests - Slow Down", http.StatusTooManyRequests)
 			return
@@ -81,7 +136,7 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			if !isAllowedOrigin(origin) {
+			if !m.isAllowedOrigin(origin) {
 				http.Error(w, "Origin Not Allowed", http.StatusForbidden)
 				return
 			}
@@ -94,6 +149,26 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (m *Middleware) SecureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (m *Middleware) LimitWriteBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isWriteMethod(r.Method) && !isIngestionPath(r.URL.Path) && r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, m.maxWriteBodyBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -137,8 +212,73 @@ func clientID(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func isAllowedOrigin(origin string) bool {
-	return origin == "http://localhost:7000"
+func (m *Middleware) rateLimitKey(r *http.Request) string {
+	if subject, ok := r.Context().Value(subjectContextKey).(string); ok && subject != "" {
+		return subject
+	}
+	token := bearerToken(r.Header.Get("Authorization"))
+	if token == "" {
+		token = r.Header.Get("X-API-Key")
+	}
+	if m.apiKey != "" && token != "" && constantTimeEqual(token, m.apiKey) {
+		return subjectFromToken(token)
+	}
+	return "ip:" + clientID(r)
+}
+
+func (m *Middleware) isAllowedOrigin(origin string) bool {
+	_, ok := m.allowedOrigins[origin]
+	return ok
+}
+
+func originSet(origins []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			set[origin] = struct{}{}
+		}
+	}
+	return set
+}
+
+func bearerToken(header string) string {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
+}
+
+func constantTimeEqual(actual string, expected string) bool {
+	actualHash := sha256.Sum256([]byte(actual))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(actualHash[:], expectedHash[:]) == 1
+}
+
+func subjectFromToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return "api_key:" + hex.EncodeToString(hash[:8])
+}
+
+func SubjectFromContext(ctx context.Context) string {
+	if subject, ok := ctx.Value(subjectContextKey).(string); ok {
+		return subject
+	}
+	return ""
+}
+
+func isIngestionPath(path string) bool {
+	return path == "/v1/ingest/conversations"
+}
+
+func isWriteMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 type responseWriter struct {

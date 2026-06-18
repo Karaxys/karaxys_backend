@@ -28,6 +28,8 @@ type DB struct {
 	IngestDeadLetters    *mongo.Collection
 	ScanJobs             *mongo.Collection
 	ScanResults          *mongo.Collection
+	ScanSecrets          *mongo.Collection
+	AuditLogs            *mongo.Collection
 	LogRetention         LogRetention
 }
 
@@ -84,6 +86,8 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		IngestDeadLetters:    mongoDB.Collection("ingest_dead_letters"),
 		ScanJobs:             mongoDB.Collection("scan_jobs"),
 		ScanResults:          mongoDB.Collection("scan_results"),
+		ScanSecrets:          mongoDB.Collection("scan_secrets"),
+		AuditLogs:            mongoDB.Collection("audit_logs"),
 		LogRetention:         retention,
 	}
 	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
@@ -191,7 +195,20 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	return createIndexes(ctx, "scan_results", db.ScanResults, []mongo.IndexModel{
+	if err := createIndexes(ctx, "scan_secrets", db.ScanSecrets, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("scan_secrets_expires_at_ttl").SetExpireAfterSeconds(0),
+		},
+		{
+			Keys:    bson.D{{Key: "job_id", Value: 1}, {Key: "purpose", Value: 1}},
+			Options: options.Index().SetName("scan_secrets_job_purpose"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "scan_results", db.ScanResults, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "job_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_results_job_created_at"),
@@ -199,6 +216,23 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_results_inventory_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	return createIndexes(ctx, "audit_logs", db.AuditLogs, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("audit_logs_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "actor_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("audit_logs_actor_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "action", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("audit_logs_action_created_at"),
 		},
 	})
 }

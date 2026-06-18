@@ -105,6 +105,22 @@ func (db *DB) SaveIngestDeadLetter(deadLetter core.IngestDeadLetter) error {
 	return err
 }
 
+func (db *DB) SaveAuditLog(entry core.AuditLog) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if entry.ID.IsZero() {
+		entry.ID = primitive.NewObjectID()
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now().UTC()
+	}
+	_, err := db.AuditLogs.InsertOne(ctx, entry)
+	if err != nil {
+		log.Printf("Failed to save audit log: %v\n", err)
+	}
+	return err
+}
+
 func (db *DB) CreateScanJob(job core.ScanJob) (core.ScanJob, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

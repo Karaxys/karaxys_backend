@@ -3,15 +3,20 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"karaxys_backend/internal/analyzer"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/ingest"
 	"karaxys_backend/internal/scanplan"
+	"karaxys_backend/internal/security/scansecrets"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -48,11 +53,50 @@ func (s *Server) Start() {
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
 
-	mw := NewMiddleware(50, 100)
-	handler := mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mux)))))
+	mw := NewMiddleware(50, 100, middlewareOptionsFromEnv())
+	handler := mw.SecureHeaders(mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mw.LimitWriteBody(mux)))))))
 
 	log.Println("Backend running on http://localhost:8081")
 	log.Fatal(http.ListenAndServe(":8081", handler))
+}
+
+func middlewareOptionsFromEnv() MiddlewareOptions {
+	return MiddlewareOptions{
+		APIKey:            os.Getenv("KARAXYS_API_KEY"),
+		AllowedOrigins:    splitCSVEnv("KARAXYS_ALLOWED_ORIGINS", []string{"http://localhost:7000"}),
+		MaxWriteBodyBytes: int64EnvDefault("KARAXYS_MAX_WRITE_BYTES", DefaultMaxWriteBodyBytes),
+	}
+}
+
+func splitCSVEnv(key string, fallback []string) []string {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	parts := strings.Split(raw, ",")
+	var values []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			values = append(values, part)
+		}
+	}
+	if len(values) == 0 {
+		return fallback
+	}
+	return values
+}
+
+func int64EnvDefault(key string, fallback int64) int64 {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func (s *Server) handleIngestConversation(w http.ResponseWriter, r *http.Request) {
@@ -103,12 +147,18 @@ type ScanJobResponse struct {
 func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	var req ScanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Invalid JSON", 400)
 		return
 	}
 
 	objID, err := primitive.ObjectIDFromHex(req.InventoryID)
 	if err != nil {
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "invalid inventory id")
 		http.Error(w, "Invalid Inventory ID", 400)
 		return
 	}
@@ -116,11 +166,13 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	var target core.ApiInventory
 	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&target)
 	if err != nil {
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "endpoint not found")
 		http.Error(w, "Endpoint Not Found", 404)
 		return
 	}
 
 	if target.BaseURL == "" {
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "target base url missing")
 		http.Error(w, "Target BaseURL missing in inventory. Re-capture traffic.", 400)
 		return
 	}
@@ -133,11 +185,24 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		req.TestType,
 	)
 	if err != nil {
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "scan config error")
 		http.Error(w, "Config Error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	jobID := primitive.NewObjectID()
+	if err := s.externalizeScanAuthSecret(jobID, &config); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, scansecrets.ErrSecretKeyMissing) {
+			status = http.StatusServiceUnavailable
+		}
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "scan secret setup failed")
+		http.Error(w, "Scan secret setup failed: "+err.Error(), status)
+		return
+	}
+
 	job, err := s.DB.CreateScanJob(core.ScanJob{
+		ID:           jobID,
 		InventoryID:  target.ID,
 		Status:       core.ScanJobStatusQueued,
 		TestType:     req.TestType,
@@ -145,10 +210,15 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		Config:       config,
 	})
 	if err != nil {
+		if config.AuthSecretRef != "" {
+			s.deleteScanSecret(config.AuthSecretRef)
+		}
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "failed to enqueue scan job")
 		http.Error(w, "Failed to enqueue scan job", http.StatusInternalServerError)
 		return
 	}
 
+	s.auditScanCreate(r, job.ID.Hex(), req, core.AuditStatusSuccess, "")
 	log.Printf("Scan queued: job=%s test=%s target=%s", job.ID.Hex(), req.TestType, target.PathPattern)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -160,6 +230,71 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		TestType:     job.TestType,
 		ResultsCount: job.ResultsCount,
 	})
+}
+
+func (s *Server) auditScanCreate(r *http.Request, jobID string, req ScanRequest, status string, message string) {
+	if s == nil || s.DB == nil {
+		return
+	}
+	actorID := SubjectFromContext(r.Context())
+	if actorID == "" {
+		actorID = "unknown"
+	}
+	if err := s.DB.SaveAuditLog(core.AuditLog{
+		ActorType:    core.AuditActorAPIKey,
+		ActorID:      actorID,
+		Action:       core.AuditActionScanCreate,
+		ResourceType: "scan_job",
+		ResourceID:   jobID,
+		Status:       status,
+		RemoteAddr:   clientID(r),
+		Message:      message,
+		Metadata: map[string]string{
+			"inventory_id":  req.InventoryID,
+			"test_type":     req.TestType,
+			"attack_method": req.AttackMethod,
+		},
+	}); err != nil {
+		log.Printf("Failed to audit scan creation: %v", err)
+	}
+}
+
+func (s *Server) externalizeScanAuthSecret(jobID primitive.ObjectID, config *core.ScanConfig) error {
+	if config == nil || config.ManualAuth == "" {
+		return nil
+	}
+	protector, err := scansecrets.FromEnv()
+	if err != nil {
+		return err
+	}
+	nonce, ciphertext, err := protector.Encrypt(config.ManualAuth)
+	if err != nil {
+		return fmt.Errorf("encrypt scan auth secret: %w", err)
+	}
+	secret, err := s.DB.SaveScanSecret(core.ScanSecret{
+		JobID:      jobID,
+		Purpose:    core.ScanSecretPurposeAuth,
+		KeyID:      protector.KeyID(),
+		Nonce:      nonce,
+		Ciphertext: ciphertext,
+		ExpiresAt:  time.Now().UTC().Add(24 * time.Hour),
+	})
+	if err != nil {
+		return fmt.Errorf("persist scan auth secret: %w", err)
+	}
+	config.AuthSecretRef = secret.ID.Hex()
+	config.ManualAuth = ""
+	return nil
+}
+
+func (s *Server) deleteScanSecret(ref string) {
+	id, err := primitive.ObjectIDFromHex(ref)
+	if err != nil {
+		return
+	}
+	if err := s.DB.DeleteScanSecret(id); err != nil {
+		log.Printf("Failed to cleanup scan secret ref=%s: %v", ref, err)
+	}
 }
 
 func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {

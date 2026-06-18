@@ -34,7 +34,9 @@ make mongo
 Start the API server only:
 
 ```sh
-KARAXYS_AGENT_TOKEN=dev-agent-token make api
+KARAXYS_AGENT_TOKEN=dev-agent-token \
+KARAXYS_API_KEY=dev-api-key \
+make api
 ```
 
 Start the isolated Nuclei scanner worker:
@@ -57,12 +59,22 @@ with a `job_id`. The API server does not import or execute Nuclei directly.
 The scanner worker claims queued jobs from MongoDB, executes Nuclei, writes
 `scan_results`, and marks the job `completed` or `failed`.
 
+Auth material supplied for auth-based scans is not stored in `scan_jobs`.
+Instead, the API server encrypts it into `scan_secrets`, stores only an
+`auth_secret_ref` on the scan job, and the scanner worker decrypts it after
+claiming the job. Both API and scanner worker must use the same
+`KARAXYS_SECRET_KEY_B64` value for auth-based scans.
+
 Useful endpoints:
 
 - `POST /scan`
 - `GET /scan-jobs/{id}`
 - `GET /scan-results?job_id={id}`
 - `GET /scan-results?inventory_id={id}`
+
+Normal backend API endpoints require `X-API-Key` or `Authorization: Bearer` with
+`KARAXYS_API_KEY`. The eBPF ingestion endpoint is intentionally separate and
+continues to use `KARAXYS_AGENT_TOKEN`.
 
 ## Security Baseline
 
@@ -81,8 +93,40 @@ The redaction policy covers `Authorization`, `Cookie`, `Set-Cookie`,
 password/secret fields, token query parameters, and AWS access key IDs.
 
 The analyzer may inspect raw in-memory events to classify sensitive data, but
-persisted samples are redacted. Auth material supplied to future auth-based scan
-jobs still needs a secret-reference model before public or production exposure.
+persisted samples are redacted. Scan auth material is stored through encrypted
+short-lived secret references instead of raw `scan_jobs.config.manual_auth`.
+
+Generate the local scan secret key with:
+
+```sh
+openssl rand -base64 32
+```
+
+Set the generated value as `KARAXYS_SECRET_KEY_B64` in `.env` or in the
+environment of both `make api` and `make scanner-worker`. `BROKEN_USER_AUTH`
+does not need this key because it intentionally removes auth.
+
+Backend API security controls currently include:
+
+- API-key authentication for inventory and scan endpoints.
+- Separate agent-token authentication for `POST /v1/ingest/conversations`.
+- Configurable CORS through `KARAXYS_ALLOWED_ORIGINS`.
+- Secure response headers on API responses.
+- Write request body limiting through `KARAXYS_MAX_WRITE_BYTES`.
+- Rate limiting by authenticated API key subject, falling back to client IP for
+  unauthenticated/exempt paths.
+- Audit log collection with scan creation success/failure records.
+
+Production mode is enabled with:
+
+```sh
+KARAXYS_ENV=production
+```
+
+In production mode, backend entrypoints validate required secrets and refuse to
+start with missing placeholder values, weak API/agent tokens, localhost CORS
+origins, or an invalid scan secret key. The legacy proxy command also disables
+automatic Chrome launch in production mode.
 
 ## End-To-End Local Workflow
 
@@ -101,7 +145,9 @@ Terminal 1: start MongoDB and the API server.
 ```sh
 cd /home/shion/Documents/Karaxys/karaxys_backend
 make mongo
-KARAXYS_AGENT_TOKEN=dev-agent-token make api
+KARAXYS_AGENT_TOKEN=dev-agent-token \
+KARAXYS_API_KEY=dev-api-key \
+make api
 ```
 
 Expected API signals:
@@ -146,17 +192,21 @@ Expected backend ingestion signals:
 Verify inventory from another shell:
 
 ```sh
-curl -s "http://127.0.0.1:8081/inventory?limit=50" | jq
+curl -s "http://127.0.0.1:8081/inventory?limit=50" \
+  -H "X-API-Key: dev-api-key" \
+  | jq
 ```
 
 Pick the captured login endpoint and queue a broken-auth scan:
 
 ```sh
 INVENTORY_ID="$(curl -s "http://127.0.0.1:8081/inventory?limit=50" \
+  -H "X-API-Key: dev-api-key" \
   | jq -r '.data[] | select(.PathPattern == "/users/{id}/login") | .ID' \
   | head -n 1)"
 
 JOB_ID="$(curl -s -X POST "http://127.0.0.1:8081/scan" \
+  -H "X-API-Key: dev-api-key" \
   -H "Content-Type: application/json" \
   -d "{\"inventory_id\":\"${INVENTORY_ID}\",\"test_type\":\"BROKEN_USER_AUTH\"}" \
   | jq -r '.job_id')"
@@ -167,8 +217,13 @@ echo "${JOB_ID}"
 Check job status and results:
 
 ```sh
-curl -s "http://127.0.0.1:8081/scan-jobs/${JOB_ID}" | jq
-curl -s "http://127.0.0.1:8081/scan-results?job_id=${JOB_ID}" | jq
+curl -s "http://127.0.0.1:8081/scan-jobs/${JOB_ID}" \
+  -H "X-API-Key: dev-api-key" \
+  | jq
+
+curl -s "http://127.0.0.1:8081/scan-results?job_id=${JOB_ID}" \
+  -H "X-API-Key: dev-api-key" \
+  | jq
 ```
 
 Expected scan signals:
@@ -186,10 +241,9 @@ cd /home/shion/Documents/Karaxys/dashboard
 npm run dev
 ```
 
-Open `http://localhost:7000/dashboard/logs` and verify the captured endpoints
-are listed. Open `http://localhost:7000/dashboard/scan`, select the login
-endpoint, launch a scan, and confirm the result appears after the worker
-completes the job.
+The dashboard currently needs API-key header wiring before this optional browser
+check works with authenticated backend endpoints. Use the curl checks above for
+backend/eBPF validation until the UI sprint is resumed.
 
 Cleanup:
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/security/redact"
 	"strings"
 )
 
@@ -150,14 +151,19 @@ func resolveAuthToken(testType string, inventory *core.ApiInventory, reqManualTo
 }
 
 func pickToken(reqManualToken string, inventory *core.ApiInventory, index int) string {
-	if reqManualToken != "" {
+	if usableToken(reqManualToken) {
 		return reqManualToken
 	}
 	authHeaders := inventory.SampleHeaders["Authorization"]
-	if index >= 0 && index < len(authHeaders) {
+	if index >= 0 && index < len(authHeaders) && usableToken(authHeaders[index]) {
 		return authHeaders[index]
 	}
 	return ""
+}
+
+func usableToken(token string) bool {
+	token = strings.TrimSpace(token)
+	return token != "" && token != redact.Marker
 }
 
 func resolveMethod(testType string, originalMethod string, reqMethod string) string {

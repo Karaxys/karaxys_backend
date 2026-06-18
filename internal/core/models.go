@@ -75,6 +75,40 @@ type IngestDeadLetter struct {
 	PayloadExcerpt string             `bson:"payload_excerpt,omitempty" json:"payload_excerpt,omitempty"`
 }
 
+const (
+	AuditActorAPIKey      = "api_key"
+	AuditActionScanCreate = "scan.create"
+	AuditStatusSuccess    = "success"
+	AuditStatusFailure    = "failure"
+)
+
+type AuditLog struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
+	ActorType    string             `bson:"actor_type" json:"actor_type"`
+	ActorID      string             `bson:"actor_id,omitempty" json:"actor_id,omitempty"`
+	Action       string             `bson:"action" json:"action"`
+	ResourceType string             `bson:"resource_type,omitempty" json:"resource_type,omitempty"`
+	ResourceID   string             `bson:"resource_id,omitempty" json:"resource_id,omitempty"`
+	Status       string             `bson:"status" json:"status"`
+	RemoteAddr   string             `bson:"remote_addr,omitempty" json:"remote_addr,omitempty"`
+	Message      string             `bson:"message,omitempty" json:"message,omitempty"`
+	Metadata     map[string]string  `bson:"metadata,omitempty" json:"metadata,omitempty"`
+}
+
+const ScanSecretPurposeAuth = "scan_auth"
+
+type ScanSecret struct {
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	JobID      primitive.ObjectID `bson:"job_id" json:"job_id"`
+	Purpose    string             `bson:"purpose" json:"purpose"`
+	KeyID      string             `bson:"key_id,omitempty" json:"key_id,omitempty"`
+	Nonce      string             `bson:"nonce" json:"-"`
+	Ciphertext string             `bson:"ciphertext" json:"-"`
+	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
+	ExpiresAt  time.Time          `bson:"expires_at" json:"expires_at"`
+}
+
 type ApiInventory struct {
 	ID             primitive.ObjectID  `bson:"_id,omitempty"`
 	Method         string              `bson:"method"`
@@ -115,15 +149,16 @@ const (
 )
 
 type ScanConfig struct {
-	TargetURL    string            `bson:"target_url" json:"target_url"`
-	Method       string            `bson:"method" json:"method"`
-	Path         string            `bson:"path" json:"path"`
-	Body         string            `bson:"body,omitempty" json:"body,omitempty"`
-	Headers      map[string]string `bson:"headers,omitempty" json:"headers,omitempty"`
-	TestType     string            `bson:"test_type" json:"test_type"`
-	ManualAuth   string            `bson:"manual_auth,omitempty" json:"manual_auth,omitempty"`
-	AttackMethod string            `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
-	PollutedBody string            `bson:"polluted_body,omitempty" json:"polluted_body,omitempty"`
+	TargetURL     string            `bson:"target_url" json:"target_url"`
+	Method        string            `bson:"method" json:"method"`
+	Path          string            `bson:"path" json:"path"`
+	Body          string            `bson:"body,omitempty" json:"body,omitempty"`
+	Headers       map[string]string `bson:"headers,omitempty" json:"headers,omitempty"`
+	TestType      string            `bson:"test_type" json:"test_type"`
+	AuthSecretRef string            `bson:"auth_secret_ref,omitempty" json:"auth_secret_ref,omitempty"`
+	ManualAuth    string            `bson:"-" json:"-"`
+	AttackMethod  string            `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
+	PollutedBody  string            `bson:"polluted_body,omitempty" json:"polluted_body,omitempty"`
 }
 
 type ScanExecutionResult struct {

@@ -19,6 +19,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
+	if err := config.ValidateProductionEnvironment(config.ServiceLegacyProxy); err != nil {
+		log.Fatalf("Invalid production environment: %v", err)
+	}
 
 	database, err := db.Connect(cfg.MongoURI, cfg.MongoDBName, db.LogRetention{
 		MaxEvents: cfg.TrafficLogMaxEvents,
@@ -57,6 +60,11 @@ func main() {
 		srv.Start()
 	}()
 	time.Sleep(1 * time.Second)
+
+	if config.IsProduction() {
+		log.Println("Production mode detected: automatic Chrome launch is disabled")
+		select {}
+	}
 
 	err = browser.OpenChrome("http://"+cfg.ProxyAddr, "")
 	if err != nil {

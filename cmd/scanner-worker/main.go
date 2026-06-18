@@ -6,11 +6,14 @@ import (
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/scanner"
+	"karaxys_backend/internal/security/scansecrets"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func main() {
@@ -22,6 +25,9 @@ func main() {
 	cfg, err := config.LoadDatabaseConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
+	}
+	if err := config.ValidateProductionEnvironment(config.ServiceScannerWorker); err != nil {
+		log.Fatalf("Invalid production environment: %v", err)
 	}
 	database, err := db.Connect(cfg.MongoURI, cfg.MongoDBName, db.LogRetention{
 		MaxEvents: cfg.TrafficLogMaxEvents,
@@ -66,7 +72,15 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string) (bool
 	}
 
 	log.Printf("Claimed scan job id=%s test=%s inventory=%s", job.ID.Hex(), job.TestType, job.InventoryID.Hex())
-	results, err := engine.ExecuteScan(job.Config)
+	defer cleanupScanSecret(database, job.Config.AuthSecretRef)
+
+	config := job.Config
+	if err := hydrateScanAuthSecret(database, &config); err != nil {
+		_ = database.FailScanJob(job.ID, err.Error())
+		return true, err
+	}
+
+	results, err := engine.ExecuteScan(config)
 	if err != nil {
 		_ = database.FailScanJob(job.ID, err.Error())
 		return true, err
@@ -96,6 +110,44 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string) (bool
 	}
 	log.Printf("Completed scan job id=%s results=%d", job.ID.Hex(), len(results))
 	return true, nil
+}
+
+func hydrateScanAuthSecret(database *db.DB, config *core.ScanConfig) error {
+	if config == nil || config.AuthSecretRef == "" {
+		return nil
+	}
+	secretID, err := primitive.ObjectIDFromHex(config.AuthSecretRef)
+	if err != nil {
+		return err
+	}
+	secret, err := database.GetScanSecret(secretID)
+	if err != nil {
+		return err
+	}
+	protector, err := scansecrets.FromEnv()
+	if err != nil {
+		return err
+	}
+	plaintext, err := protector.Decrypt(secret.Nonce, secret.Ciphertext)
+	if err != nil {
+		return err
+	}
+	config.ManualAuth = plaintext
+	return nil
+}
+
+func cleanupScanSecret(database *db.DB, ref string) {
+	if ref == "" {
+		return
+	}
+	secretID, err := primitive.ObjectIDFromHex(ref)
+	if err != nil {
+		log.Printf("Invalid scan secret ref=%s: %v", ref, err)
+		return
+	}
+	if err := database.DeleteScanSecret(secretID); err != nil {
+		log.Printf("Failed to cleanup scan secret ref=%s: %v", ref, err)
+	}
 }
 
 func hostnameDefault(fallback string) string {

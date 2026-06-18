@@ -13,6 +13,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
+	if err := config.ValidateProductionEnvironment(config.ServiceAPIServer); err != nil {
+		log.Fatalf("Invalid production environment: %v", err)
+	}
 
 	database, err := db.Connect(cfg.MongoURI, cfg.MongoDBName, db.LogRetention{
 		MaxEvents: cfg.TrafficLogMaxEvents,
