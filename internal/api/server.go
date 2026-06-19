@@ -55,8 +55,11 @@ func (s *Server) Start() {
 	mux.HandleFunc("POST /api/fetchQuickStartPageState", s.handleQuickStartState)
 	mux.HandleFunc("GET /data-sources", s.handleListDataSources)
 	mux.HandleFunc("POST /data-sources", s.handleCreateDataSource)
+	mux.HandleFunc("DELETE /data-sources/{id}", s.handleDeleteDataSource)
 	mux.HandleFunc("POST /agent-enrollments", s.handleCreateAgentEnrollment)
 	mux.HandleFunc("POST /agents/register", s.handleRegisterAgent)
+	mux.HandleFunc("GET /settings/security", s.handleGetSecuritySettings)
+	mux.HandleFunc("PUT /settings/security", s.handleUpdateSecuritySettings)
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
 	mux.HandleFunc("GET /scan-jobs/{id}", s.handleGetScanJob)
@@ -77,6 +80,8 @@ func (s *Server) Start() {
 func (s *Server) middlewareOptionsFromEnv() MiddlewareOptions {
 	return MiddlewareOptions{
 		APIKey:            os.Getenv("KARAXYS_API_KEY"),
+		APIKeyAccountID:   os.Getenv("KARAXYS_API_KEY_ACCOUNT_ID"),
+		APIKeyRole:        os.Getenv("KARAXYS_API_KEY_ROLE"),
 		SessionAuth:       s.authenticateSessionToken,
 		AllowedOrigins:    splitCSVEnv("KARAXYS_ALLOWED_ORIGINS", []string{"http://localhost:7000"}),
 		MaxWriteBodyBytes: int64EnvDefault("KARAXYS_MAX_WRITE_BYTES", DefaultMaxWriteBodyBytes),
@@ -123,6 +128,10 @@ func (s *Server) handleIngestConversation(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -137,8 +146,7 @@ func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
 	}
 	var results *db.PaginatedResponse
 	var err error
-	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.AccountID != "" && principal.ActorType == core.AuditActorUser {
-		accountID, parseErr := primitive.ObjectIDFromHex(principal.AccountID)
+	if accountID, scoped, parseErr := scopedAccountID(principal); scoped {
 		if parseErr != nil {
 			http.Error(w, "Invalid account", http.StatusUnauthorized)
 			return
@@ -172,6 +180,10 @@ type ScanJobResponse struct {
 }
 
 func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, scanRoles...)
+	if !ok {
+		return
+	}
 	var req ScanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		var maxBytesErr *http.MaxBytesError
@@ -192,7 +204,12 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 
 	var target core.ApiInventory
 	filter := bson.M{"_id": objID}
-	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.AccountID != "" && principal.ActorType == core.AuditActorUser {
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			s.auditScanCreate(r, "", req, core.AuditStatusFailure, "invalid account")
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
 		filter["tenant_id"] = principal.AccountID
 	}
 	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), filter).Decode(&target)
@@ -338,6 +355,10 @@ func (s *Server) deleteScanSecret(ref string) {
 }
 
 func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
 	idStr := r.PathValue("id")
 	objID, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
@@ -349,9 +370,15 @@ func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
 		return
 	}
-	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.ActorType == core.AuditActorUser && principal.AccountID != "" && job.TenantID != principal.AccountID {
-		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
-		return
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		if job.TenantID != principal.AccountID {
+			http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ScanJobResponse{
@@ -365,6 +392,10 @@ func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -401,8 +432,7 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 	}
 	var results *db.PaginatedResponse
 	var err error
-	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.ActorType == core.AuditActorUser && principal.AccountID != "" {
-		accountID, parseErr := primitive.ObjectIDFromHex(principal.AccountID)
+	if accountID, scoped, parseErr := scopedAccountID(principal); scoped {
 		if parseErr != nil {
 			http.Error(w, "Invalid account", http.StatusUnauthorized)
 			return
@@ -421,6 +451,10 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
 	idStr := r.PathValue("id")
 	objID, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
@@ -429,7 +463,11 @@ func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) 
 	}
 	var target core.ApiInventory
 	filter := bson.M{"_id": objID}
-	if principal, ok := PrincipalFromContext(r.Context()); ok && principal.AccountID != "" && principal.ActorType == core.AuditActorUser {
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
 		filter["tenant_id"] = principal.AccountID
 	}
 	err = s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(context.TODO(), filter).Decode(&target)

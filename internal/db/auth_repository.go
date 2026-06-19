@@ -206,11 +206,7 @@ func (db *DB) CountInventoryForAccount(accountID primitive.ObjectID) (int64, err
 	defer cancel()
 	filter := bson.M{}
 	if !accountID.IsZero() {
-		filter = bson.M{"$or": []bson.M{
-			{"tenant_id": accountID.Hex()},
-			{"tenant_id": bson.M{"$exists": false}},
-			{"tenant_id": ""},
-		}}
+		filter = bson.M{"tenant_id": accountID.Hex()}
 	}
 	return db.Client.Database(db.Name).Collection("api_inventory").CountDocuments(ctx, filter)
 }

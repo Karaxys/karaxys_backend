@@ -43,7 +43,7 @@ func (db *DB) CreateDataSource(source core.DataSource) (core.DataSource, error) 
 func (db *DB) ListDataSources(accountID primitive.ObjectID) ([]core.DataSource, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	filter := bson.M{"account_id": accountID}
+	filter := bson.M{"account_id": accountID, "deleted_at": zeroOrMissingTimeFilter()}
 	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
 	cursor, err := db.DataSources.Find(ctx, filter, opts)
 	if err != nil {
@@ -61,11 +61,55 @@ func (db *DB) GetDataSourceForAccount(accountID primitive.ObjectID, sourceID pri
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var source core.DataSource
-	err := db.DataSources.FindOne(ctx, bson.M{"_id": sourceID, "account_id": accountID}).Decode(&source)
+	err := db.DataSources.FindOne(ctx, bson.M{"_id": sourceID, "account_id": accountID, "deleted_at": zeroOrMissingTimeFilter()}).Decode(&source)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return core.DataSource{}, ErrDataSourceNotFound
 	}
 	return source, err
+}
+
+func (db *DB) DeleteDataSourceForAccount(accountID primitive.ObjectID, sourceID primitive.ObjectID, deletedBy primitive.ObjectID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	set := bson.M{
+		"status":     core.DataSourceStatusDeleted,
+		"deleted_at": now,
+		"updated_at": now,
+	}
+	if !deletedBy.IsZero() {
+		set["deleted_by"] = deletedBy
+	}
+	result, err := db.DataSources.UpdateOne(ctx, bson.M{
+		"_id":        sourceID,
+		"account_id": accountID,
+	}, bson.M{"$set": set})
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrDataSourceNotFound
+	}
+	if _, err := db.AgentEnrollments.UpdateMany(ctx, bson.M{
+		"account_id":     accountID,
+		"data_source_id": sourceID,
+		"used_at":        zeroOrMissingTimeFilter(),
+	}, bson.M{"$set": bson.M{
+		"expires_at": now,
+	}}); err != nil {
+		return err
+	}
+	if _, err := db.Agents.UpdateMany(ctx, bson.M{
+		"account_id":     accountID,
+		"data_source_id": sourceID,
+		"status":         "active",
+	}, bson.M{"$set": bson.M{
+		"status":     "disabled",
+		"updated_at": now,
+	}}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) CreateAgentEnrollment(enrollment core.AgentEnrollment) (core.AgentEnrollment, error) {

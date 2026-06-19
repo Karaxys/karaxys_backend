@@ -87,8 +87,10 @@ const (
 	AuditActionSessionRefresh        = "auth.refresh"
 	AuditActionScanCreate            = "scan.create"
 	AuditActionDataSourceCreate      = "data_source.create"
+	AuditActionDataSourceDelete      = "data_source.delete"
 	AuditActionAgentEnrollmentCreate = "agent_enrollment.create"
 	AuditActionAgentRegister         = "agent.register"
+	AuditActionSettingsUpdate        = "settings.update"
 	AuditStatusSuccess               = "success"
 	AuditStatusFailure               = "failure"
 )
@@ -137,6 +139,17 @@ type Account struct {
 	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
+type AccountSettings struct {
+	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	AccountID        primitive.ObjectID `bson:"account_id" json:"account_id"`
+	RetentionHours   int                `bson:"retention_hours" json:"retention_hours"`
+	MaxTrafficEvents int                `bson:"max_traffic_events" json:"max_traffic_events"`
+	RedactionEnabled bool               `bson:"redaction_enabled" json:"redaction_enabled"`
+	UpdatedBy        primitive.ObjectID `bson:"updated_by,omitempty" json:"updated_by,omitempty"`
+	CreatedAt        time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt        time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
 type User struct {
 	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Email        string             `bson:"email" json:"email"`
@@ -174,6 +187,7 @@ const (
 
 	DataSourceStatusPending   = "pending"
 	DataSourceStatusConnected = "connected"
+	DataSourceStatusDeleted   = "deleted"
 )
 
 type DataSource struct {
@@ -185,6 +199,8 @@ type DataSource struct {
 	TargetURL string             `bson:"target_url,omitempty" json:"target_url,omitempty"`
 	Config    map[string]string  `bson:"config,omitempty" json:"config,omitempty"`
 	CreatedBy primitive.ObjectID `bson:"created_by,omitempty" json:"created_by,omitempty"`
+	DeletedBy primitive.ObjectID `bson:"deleted_by,omitempty" json:"deleted_by,omitempty"`
+	DeletedAt time.Time          `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
 }

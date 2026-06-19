@@ -43,6 +43,14 @@ dashboard/product flow uses user sessions from `/auth/signup` and `/auth/login`.
 The normal eBPF flow uses per-agent tokens issued from enrollment tokens instead
 of a shared global `KARAXYS_AGENT_TOKEN`.
 
+For production automation, bind the compatibility API key to an account and a
+role:
+
+```sh
+KARAXYS_API_KEY_ACCOUNT_ID=<mongodb-account-object-id>
+KARAXYS_API_KEY_ROLE=scanner
+```
+
 Start the isolated Nuclei scanner worker:
 
 ```sh
@@ -77,9 +85,13 @@ Useful endpoints:
 - `POST /auth/logout`
 - `GET /auth/me`
 - `GET /quick-start`
+- `GET /data-sources`
 - `POST /data-sources`
+- `DELETE /data-sources/{id}`
 - `POST /agent-enrollments`
 - `POST /agents/register`
+- `GET /settings/security`
+- `PUT /settings/security`
 - `POST /scan`
 - `GET /scan-jobs/{id}`
 - `GET /scan-results?job_id={id}`
@@ -129,17 +141,24 @@ Backend API security controls currently include:
 - Email/password signup and login with access tokens and HttpOnly refresh-token
   cookies.
 - Session authentication for dashboard/product APIs.
-- API-key compatibility for local automation.
+- RBAC roles for admin, analyst, scanner, read-only, and reserved agent
+  principals.
+- API-key compatibility for local automation, with optional production account
+  and role scoping.
 - Per-agent enrollment and token authentication for
   `POST /v1/ingest/conversations`.
 - Account scoping for inventory, scan jobs, scan results, data sources, and
   agent enrollment flows.
+- Admin-only data-source creation/deletion and agent enrollment.
 - Configurable CORS through `KARAXYS_ALLOWED_ORIGINS`.
 - Secure response headers on API responses.
 - Write request body limiting through `KARAXYS_MAX_WRITE_BYTES`.
 - Rate limiting by authenticated API key subject, falling back to client IP for
   unauthenticated/exempt paths.
-- Audit log collection with scan creation success/failure records.
+- Audit log collection for auth, scan creation, data-source creation/deletion,
+  settings updates, agent enrollment, and agent registration.
+- Account-level security settings for log retention preferences and enforced
+  redaction. Redaction cannot be disabled through the API.
 
 Production mode is enabled with:
 
@@ -149,8 +168,9 @@ KARAXYS_ENV=production
 
 In production mode, backend entrypoints validate required secrets and refuse to
 start with missing placeholder values, weak configured compatibility API/agent
-tokens, localhost CORS origins, or an invalid scan secret key. The legacy proxy
-command also disables automatic Chrome launch in production mode.
+tokens, unscoped compatibility API keys, localhost CORS origins, or an invalid
+scan secret key. The legacy proxy command also disables automatic Chrome launch
+in production mode.
 
 ## End-To-End Local Workflow
 
@@ -267,6 +287,20 @@ curl -s "http://127.0.0.1:8081/inventory?limit=50" \
   | jq
 ```
 
+Verify account settings and the audited settings update path:
+
+```sh
+curl -s "http://127.0.0.1:8081/settings/security" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  | jq
+
+curl -s -X PUT "http://127.0.0.1:8081/settings/security" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"retention_hours":24,"max_traffic_events":1000,"redaction_enabled":true}' \
+  | jq
+```
+
 Pick the captured login endpoint and queue a broken-auth scan:
 
 ```sh
@@ -311,7 +345,7 @@ cd /home/shion/Documents/Karaxys/dashboard
 npm run dev
 ```
 
-The dashboard currently needs API-key header wiring before this optional browser
+The dashboard currently needs session-auth wiring before this optional browser
 check works with authenticated backend endpoints. Use the curl checks above for
 backend/eBPF validation until the UI sprint is resumed.
 
@@ -319,5 +353,8 @@ Cleanup:
 
 ```sh
 cd /home/shion/Documents/Karaxys/karaxys_backend
+curl -s -X DELETE "http://127.0.0.1:8081/data-sources/${DATA_SOURCE_ID}" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -o /dev/null -w "%{http_code}\n"
 docker compose down
 ```

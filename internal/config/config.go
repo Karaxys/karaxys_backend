@@ -71,6 +71,14 @@ func ValidateProductionEnvironment(service string) error {
 	if key := os.Getenv("KARAXYS_API_KEY"); key != "" && len(key) < 24 {
 		problems = append(problems, "KARAXYS_API_KEY must be at least 24 characters")
 	}
+	if key := os.Getenv("KARAXYS_API_KEY"); key != "" {
+		if !isObjectIDHex(os.Getenv("KARAXYS_API_KEY_ACCOUNT_ID")) {
+			problems = append(problems, "KARAXYS_API_KEY_ACCOUNT_ID must be a 24-character hex account id when KARAXYS_API_KEY is set in production")
+		}
+		if role := os.Getenv("KARAXYS_API_KEY_ROLE"); role != "" && !isValidAPIKeyRole(role) {
+			problems = append(problems, "KARAXYS_API_KEY_ROLE must be admin, analyst, scanner, or read_only")
+		}
+	}
 	if token := os.Getenv("KARAXYS_AGENT_TOKEN"); token != "" && len(token) < 24 {
 		problems = append(problems, "KARAXYS_AGENT_TOKEN must be at least 24 characters")
 	}
@@ -95,6 +103,28 @@ func ValidateProductionEnvironment(service string) error {
 func invalidProductionValue(value string) bool {
 	value = strings.TrimSpace(value)
 	return value == "" || strings.Contains(strings.ToLower(value), "replace-with")
+}
+
+func isObjectIDHex(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 24 {
+		return false
+	}
+	for _, ch := range value {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidAPIKeyRole(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "admin", "analyst", "scanner", "read_only":
+		return true
+	default:
+		return false
+	}
 }
 
 func LoadDatabaseConfig() (*DatabaseConfig, error) {

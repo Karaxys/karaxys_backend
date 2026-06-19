@@ -79,8 +79,11 @@ type AgentRegisterResponse struct {
 }
 
 func (s *Server) handleQuickStartState(w http.ResponseWriter, r *http.Request) {
-	principal, ok := PrincipalFromContext(r.Context())
-	if !ok || principal.AccountID == "" {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	if principal.AccountID == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -117,8 +120,11 @@ func (s *Server) handleQuickStartState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListDataSources(w http.ResponseWriter, r *http.Request) {
-	principal, ok := PrincipalFromContext(r.Context())
-	if !ok || principal.AccountID == "" {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	if principal.AccountID == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -140,8 +146,11 @@ func (s *Server) handleListDataSources(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateDataSource(w http.ResponseWriter, r *http.Request) {
-	principal, ok := PrincipalFromContext(r.Context())
-	if !ok || principal.AccountID == "" || principal.UserID == "" {
+	principal, ok := s.requireRoles(w, r, adminOnlyRoles...)
+	if !ok {
+		return
+	}
+	if principal.AccountID == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -162,8 +171,19 @@ func (s *Server) handleCreateDataSource(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	accountID, _ := primitive.ObjectIDFromHex(principal.AccountID)
-	userID, _ := primitive.ObjectIDFromHex(principal.UserID)
+	accountID, err := primitive.ObjectIDFromHex(principal.AccountID)
+	if err != nil {
+		http.Error(w, "Invalid account", http.StatusUnauthorized)
+		return
+	}
+	userID := primitive.NilObjectID
+	if principal.UserID != "" {
+		userID, err = primitive.ObjectIDFromHex(principal.UserID)
+		if err != nil {
+			http.Error(w, "Invalid user", http.StatusUnauthorized)
+			return
+		}
+	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		name = defaultDataSourceName(sourceType)
@@ -185,9 +205,54 @@ func (s *Server) handleCreateDataSource(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, dataSourceResponse(source))
 }
 
+func (s *Server) handleDeleteDataSource(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, adminOnlyRoles...)
+	if !ok {
+		return
+	}
+	if principal.AccountID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	accountID, err := primitive.ObjectIDFromHex(principal.AccountID)
+	if err != nil {
+		http.Error(w, "Invalid account", http.StatusUnauthorized)
+		return
+	}
+	sourceID, err := primitive.ObjectIDFromHex(strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		s.auditDataSource(r, core.AuditActionDataSourceDelete, core.AuditStatusFailure, "", "invalid data source id")
+		http.Error(w, "Invalid data source ID", http.StatusBadRequest)
+		return
+	}
+	deletedBy := primitive.NilObjectID
+	if principal.UserID != "" {
+		deletedBy, err = primitive.ObjectIDFromHex(principal.UserID)
+		if err != nil {
+			http.Error(w, "Invalid user", http.StatusUnauthorized)
+			return
+		}
+	}
+	if err := s.DB.DeleteDataSourceForAccount(accountID, sourceID, deletedBy); err != nil {
+		if errors.Is(err, db.ErrDataSourceNotFound) {
+			s.auditDataSource(r, core.AuditActionDataSourceDelete, core.AuditStatusFailure, sourceID.Hex(), "data source not found")
+			http.Error(w, "Data source not found", http.StatusNotFound)
+			return
+		}
+		s.auditDataSource(r, core.AuditActionDataSourceDelete, core.AuditStatusFailure, sourceID.Hex(), "delete failed")
+		http.Error(w, "Delete failed", http.StatusInternalServerError)
+		return
+	}
+	s.auditDataSource(r, core.AuditActionDataSourceDelete, core.AuditStatusSuccess, sourceID.Hex(), "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleCreateAgentEnrollment(w http.ResponseWriter, r *http.Request) {
-	principal, ok := PrincipalFromContext(r.Context())
-	if !ok || principal.AccountID == "" || principal.UserID == "" {
+	principal, ok := s.requireRoles(w, r, adminOnlyRoles...)
+	if !ok {
+		return
+	}
+	if principal.AccountID == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -201,8 +266,19 @@ func (s *Server) handleCreateAgentEnrollment(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Invalid data_source_id", http.StatusBadRequest)
 		return
 	}
-	accountID, _ := primitive.ObjectIDFromHex(principal.AccountID)
-	userID, _ := primitive.ObjectIDFromHex(principal.UserID)
+	accountID, err := primitive.ObjectIDFromHex(principal.AccountID)
+	if err != nil {
+		http.Error(w, "Invalid account", http.StatusUnauthorized)
+		return
+	}
+	userID := primitive.NilObjectID
+	if principal.UserID != "" {
+		userID, err = primitive.ObjectIDFromHex(principal.UserID)
+		if err != nil {
+			http.Error(w, "Invalid user", http.StatusUnauthorized)
+			return
+		}
+	}
 	source, err := s.DB.GetDataSourceForAccount(accountID, sourceID)
 	if err != nil {
 		if errors.Is(err, db.ErrDataSourceNotFound) {
@@ -406,9 +482,17 @@ func shellSafeName(value string) string {
 
 func (s *Server) auditDataSource(r *http.Request, action string, status string, resourceID string, message string) {
 	principal, _ := PrincipalFromContext(r.Context())
+	actorType := principal.ActorType
+	if actorType == "" {
+		actorType = core.AuditActorUser
+	}
+	actorID := principal.UserID
+	if actorID == "" {
+		actorID = SubjectFromContext(r.Context())
+	}
 	_ = s.DB.SaveAuditLog(core.AuditLog{
-		ActorType:    core.AuditActorUser,
-		ActorID:      principal.UserID,
+		ActorType:    actorType,
+		ActorID:      actorID,
 		Action:       action,
 		ResourceType: "data_source",
 		ResourceID:   resourceID,

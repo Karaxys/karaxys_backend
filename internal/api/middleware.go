@@ -39,6 +39,8 @@ type Middleware struct {
 	burst             int
 	lastCleanup       time.Time
 	apiKey            string
+	apiKeyAccountID   string
+	apiKeyRole        string
 	sessionAuth       SessionAuthenticator
 	allowedOrigins    map[string]struct{}
 	maxWriteBodyBytes int64
@@ -51,6 +53,8 @@ type clientLimiter struct {
 
 type MiddlewareOptions struct {
 	APIKey            string
+	APIKeyAccountID   string
+	APIKeyRole        string
 	SessionAuth       SessionAuthenticator
 	AllowedOrigins    []string
 	MaxWriteBodyBytes int64
@@ -77,6 +81,8 @@ func NewMiddleware(rps float64, burst int, options ...MiddlewareOptions) *Middle
 		burst:             burst,
 		lastCleanup:       time.Now(),
 		apiKey:            strings.TrimSpace(opts.APIKey),
+		apiKeyAccountID:   strings.TrimSpace(opts.APIKeyAccountID),
+		apiKeyRole:        normalizeAPIKeyRole(opts.APIKeyRole),
 		sessionAuth:       opts.SessionAuth,
 		allowedOrigins:    originSet(opts.AllowedOrigins),
 		maxWriteBodyBytes: opts.MaxWriteBodyBytes,
@@ -132,6 +138,8 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		principal := Principal{
 			Subject:   subjectFromToken(token),
 			ActorType: "api_key",
+			AccountID: m.apiKeyAccountID,
+			Role:      m.apiKeyRole,
 		}
 		ctx := context.WithValue(r.Context(), subjectContextKey, principal.Subject)
 		ctx = context.WithValue(ctx, principalContextKey, principal)
@@ -177,7 +185,7 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "600")

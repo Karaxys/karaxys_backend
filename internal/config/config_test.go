@@ -107,6 +107,8 @@ func TestValidateProductionEnvironmentAcceptsCompleteAPIEnvironment(t *testing.T
 	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
 	t.Setenv("MONGO_DB_NAME", "karaxys")
 	t.Setenv("KARAXYS_API_KEY", "api-key-with-at-least-24-characters")
+	t.Setenv("KARAXYS_API_KEY_ACCOUNT_ID", "507f1f77bcf86cd799439011")
+	t.Setenv("KARAXYS_API_KEY_ROLE", "scanner")
 	t.Setenv("KARAXYS_AGENT_TOKEN", "agent-token-with-at-least-24-chars")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
@@ -135,6 +137,7 @@ func TestValidateProductionEnvironmentRejectsLocalhostOriginAndInvalidSecretKey(
 	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
 	t.Setenv("MONGO_DB_NAME", "karaxys")
 	t.Setenv("KARAXYS_API_KEY", "api-key-with-at-least-24-characters")
+	t.Setenv("KARAXYS_API_KEY_ACCOUNT_ID", "507f1f77bcf86cd799439011")
 	t.Setenv("KARAXYS_AGENT_TOKEN", "agent-token-with-at-least-24-chars")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "http://localhost:7000")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", "not-valid-base64")
@@ -145,5 +148,23 @@ func TestValidateProductionEnvironmentRejectsLocalhostOriginAndInvalidSecretKey(
 	}
 	if !strings.Contains(err.Error(), "KARAXYS_ALLOWED_ORIGINS") || !strings.Contains(err.Error(), "KARAXYS_SECRET_KEY_B64") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateProductionEnvironmentRejectsUnscopedAPIKey(t *testing.T) {
+	t.Setenv("KARAXYS_ENV", "production")
+	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
+	t.Setenv("MONGO_DB_NAME", "karaxys")
+	t.Setenv("KARAXYS_API_KEY", "api-key-with-at-least-24-characters")
+	t.Setenv("KARAXYS_API_KEY_ACCOUNT_ID", "")
+	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
+	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+
+	err := ValidateProductionEnvironment(ServiceAPIServer)
+	if err == nil {
+		t.Fatalf("expected production validation error")
+	}
+	if !strings.Contains(err.Error(), "KARAXYS_API_KEY_ACCOUNT_ID") {
+		t.Fatalf("expected API key account error, got %v", err)
 	}
 }

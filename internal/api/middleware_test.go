@@ -65,6 +65,33 @@ func TestAuthenticateAcceptsAPIKeyAndBearerToken(t *testing.T) {
 	}
 }
 
+func TestAuthenticateAPIKeyPrincipalIncludesConfiguredScope(t *testing.T) {
+	mw := NewMiddleware(10, 10, MiddlewareOptions{
+		APIKey:          "dev-api-key",
+		APIKeyAccountID: "507f1f77bcf86cd799439011",
+		APIKeyRole:      "scanner",
+	})
+	handler := mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			t.Fatalf("expected principal in context")
+		}
+		if principal.ActorType != "api_key" || principal.AccountID != "507f1f77bcf86cd799439011" || principal.Role != "scanner" {
+			t.Fatalf("unexpected principal: %+v", principal)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/inventory", nil)
+	req.Header.Set("X-API-Key", "dev-api-key")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuthenticateAcceptsSessionToken(t *testing.T) {
 	mw := NewMiddleware(10, 10, MiddlewareOptions{
 		SessionAuth: func(token string) (*Principal, bool) {
