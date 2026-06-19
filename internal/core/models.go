@@ -9,9 +9,16 @@ import (
 var ErrTrafficLogDropped = errors.New("traffic log dropped by retention policy")
 
 const (
-	InventorySchemaV2       = "api.inventory.v2"
-	TrafficSampleSchemaV1   = "traffic.sample.v1"
-	SensitiveSampleSchemaV1 = "sensitive.sample.v1"
+	InventorySchemaV2          = "api.inventory.v2"
+	TrafficSampleSchemaV1      = "traffic.sample.v1"
+	SensitiveSampleSchemaV1    = "sensitive.sample.v1"
+	TrafficMetricSchemaV1      = "traffic.metric.v1"
+	TrafficMetricEventSchemaV1 = "traffic.metric_event.v1"
+)
+
+const (
+	TrafficMetricGranularityHour = "hour"
+	TrafficMetricGranularityDay  = "day"
 )
 
 type TrafficLog struct {
@@ -22,6 +29,7 @@ type TrafficLog struct {
 	CaptureSource  string              `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
 	CaptureMode    string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
 	AgentID        string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	ConversationID string              `bson:"conversation_id,omitempty" json:"conversation_id,omitempty"`
 	CreatedAt      time.Time           `bson:"created_at"`
 	Method         string              `bson:"method"`
 	URL            string              `bson:"url"`
@@ -349,6 +357,43 @@ type SensitiveSample struct {
 	Occurrences         []SensitiveOccurrence `bson:"occurrences"`
 	CapturedAt          time.Time             `bson:"captured_at"`
 	CreatedAt           time.Time             `bson:"created_at"`
+}
+
+type TrafficMetric struct {
+	ID                  primitive.ObjectID `bson:"_id,omitempty"`
+	SchemaVersion       string             `bson:"schema_version"`
+	TenantID            string             `bson:"tenant_id"`
+	ProjectID           string             `bson:"project_id"`
+	EndpointFingerprint string             `bson:"endpoint_fingerprint"`
+	Method              string             `bson:"method"`
+	BaseURL             string             `bson:"base_url"`
+	PathPattern         string             `bson:"path_pattern"`
+	BucketGranularity   string             `bson:"bucket_granularity"`
+	BucketStart         time.Time          `bson:"bucket_start"`
+	StatusCode          int                `bson:"status_code"`
+	StatusClass         string             `bson:"status_class"`
+	AuthObserved        bool               `bson:"auth_observed"`
+	RiskLevel           string             `bson:"risk_level"`
+	RequestCount        int64              `bson:"request_count"`
+	ErrorCount          int64              `bson:"error_count,omitempty"`
+	SensitiveCount      int64              `bson:"sensitive_count,omitempty"`
+	FirstSeenAt         time.Time          `bson:"first_seen_at,omitempty"`
+	LastSeenAt          time.Time          `bson:"last_seen_at,omitempty"`
+	CreatedAt           time.Time          `bson:"created_at"`
+	UpdatedAt           time.Time          `bson:"updated_at"`
+}
+
+type TrafficMetricEvent struct {
+	ID                  primitive.ObjectID `bson:"_id,omitempty"`
+	SchemaVersion       string             `bson:"schema_version"`
+	EventKey            string             `bson:"event_key"`
+	EventID             string             `bson:"event_id"`
+	TenantID            string             `bson:"tenant_id,omitempty"`
+	ProjectID           string             `bson:"project_id,omitempty"`
+	EndpointFingerprint string             `bson:"endpoint_fingerprint"`
+	BucketGranularity   string             `bson:"bucket_granularity"`
+	BucketStart         time.Time          `bson:"bucket_start"`
+	CreatedAt           time.Time          `bson:"created_at"`
 }
 
 type ScanResult struct {

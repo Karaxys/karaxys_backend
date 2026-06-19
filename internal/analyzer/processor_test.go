@@ -8,6 +8,8 @@ import (
 	"karaxys_backend/internal/analyzer/endpoint"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/security/redact"
+
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func TestProcessorHelpersSanitizeMongoFieldKeys(t *testing.T) {
@@ -193,5 +195,96 @@ func TestDetectSensitiveObservationsIncludesResponseBody(t *testing.T) {
 	}
 	if observations[0].Location != endpoint.LocationResponseBody || observations[0].Tags[0] != "EMAIL" {
 		t.Fatalf("unexpected observation: %#v", observations[0])
+	}
+}
+
+func TestMetricBucketStartAndStatusClass(t *testing.T) {
+	observed := time.Date(2026, 6, 19, 11, 42, 31, 0, time.FixedZone("IST", 5*60*60+30*60))
+
+	hour := metricBucketStart(observed, core.TrafficMetricGranularityHour)
+	if !hour.Equal(time.Date(2026, 6, 19, 6, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected hour bucket: %s", hour)
+	}
+	day := metricBucketStart(observed, core.TrafficMetricGranularityDay)
+	if !day.Equal(time.Date(2026, 6, 19, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected day bucket: %s", day)
+	}
+
+	for code, expected := range map[int]string{0: "unknown", 99: "unknown", 200: "2xx", 404: "4xx", 503: "5xx", 600: "unknown"} {
+		if got := statusClass(code); got != expected {
+			t.Fatalf("statusClass(%d) = %s, want %s", code, got, expected)
+		}
+	}
+}
+
+func TestTrafficMetricEventIDPrefersConversationIDAndFallbackIsStable(t *testing.T) {
+	logEntry := core.TrafficLog{
+		TenantID:       "tenant-1",
+		ProjectID:      "project-1",
+		AgentID:        "agent-1",
+		ConversationID: "6650f8cb1c5e7c6c1f93a111",
+		Method:         "POST",
+		URL:            "https://api.example.com/users/123",
+		Path:           "/users/123",
+		RespStatusCode: 200,
+		CreatedAt:      time.Date(2026, 6, 19, 1, 2, 3, 4, time.UTC),
+	}
+	if got := trafficMetricEventID(logEntry, "fingerprint"); got != "conversation:6650f8cb1c5e7c6c1f93a111" {
+		t.Fatalf("unexpected conversation event id: %s", got)
+	}
+
+	logEntry.ConversationID = ""
+	first := trafficMetricEventID(logEntry, "fingerprint")
+	second := trafficMetricEventID(logEntry, "fingerprint")
+	if first == "" || first != second || !strings.HasPrefix(first, "log:") {
+		t.Fatalf("fallback event id is not stable: first=%s second=%s", first, second)
+	}
+
+	logEntry.RespStatusCode = 500
+	if changed := trafficMetricEventID(logEntry, "fingerprint"); changed == first {
+		t.Fatalf("fallback event id should change when event material changes")
+	}
+}
+
+func TestTrafficMetricUpdateUsesDimensionsAndCounters(t *testing.T) {
+	logEntry := core.TrafficLog{
+		TenantID:  "tenant-1",
+		ProjectID: "project-1",
+		Method:    "post",
+	}
+	bucketStart := time.Date(2026, 6, 19, 1, 0, 0, 0, time.UTC)
+	observed := time.Date(2026, 6, 19, 1, 2, 3, 0, time.UTC)
+	now := time.Date(2026, 6, 19, 1, 3, 0, 0, time.UTC)
+
+	filter, update := trafficMetricUpdate(logEntry, "https://api.example.com", "/users/{user_id}", "fingerprint", "HIGH", true, true, 503, core.TrafficMetricGranularityHour, bucketStart, observed, now)
+
+	if filter["tenant_id"] != "tenant-1" || filter["project_id"] != "project-1" || filter["endpoint_fingerprint"] != "fingerprint" {
+		t.Fatalf("unexpected metric filter identity: %#v", filter)
+	}
+	if filter["bucket_granularity"] != core.TrafficMetricGranularityHour || filter["bucket_start"] != bucketStart || filter["status_code"] != 503 {
+		t.Fatalf("unexpected metric filter dimensions: %#v", filter)
+	}
+
+	setOnInsert := update["$setOnInsert"].(bson.M)
+	if setOnInsert["schema_version"] != core.TrafficMetricSchemaV1 || setOnInsert["status_class"] != "5xx" || setOnInsert["method"] != "POST" {
+		t.Fatalf("unexpected setOnInsert: %#v", setOnInsert)
+	}
+	inc := update["$inc"].(bson.M)
+	if inc["request_count"] != int64(1) || inc["error_count"] != int64(1) || inc["sensitive_count"] != int64(1) {
+		t.Fatalf("unexpected increments: %#v", inc)
+	}
+}
+
+func TestTrafficMetricEventKeyIsBucketScoped(t *testing.T) {
+	hour := time.Date(2026, 6, 19, 1, 0, 0, 0, time.UTC)
+	key := trafficMetricEventKey("conversation:1", "fingerprint", core.TrafficMetricGranularityHour, hour)
+	if key == "" {
+		t.Fatalf("expected event key")
+	}
+	if again := trafficMetricEventKey("conversation:1", "fingerprint", core.TrafficMetricGranularityHour, hour); again != key {
+		t.Fatalf("event key should be deterministic")
+	}
+	if other := trafficMetricEventKey("conversation:1", "fingerprint", core.TrafficMetricGranularityDay, hour); other == key {
+		t.Fatalf("event key should include bucket granularity")
 	}
 }

@@ -40,6 +40,8 @@ type DB struct {
 	APIParameters        *mongo.Collection
 	TrafficSamples       *mongo.Collection
 	SensitiveSamples     *mongo.Collection
+	TrafficMetrics       *mongo.Collection
+	TrafficMetricEvents  *mongo.Collection
 	LogRetention         LogRetention
 }
 
@@ -108,6 +110,8 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		APIParameters:        mongoDB.Collection("api_parameters"),
 		TrafficSamples:       mongoDB.Collection("traffic_samples"),
 		SensitiveSamples:     mongoDB.Collection("sensitive_samples"),
+		TrafficMetrics:       mongoDB.Collection("traffic_metrics"),
+		TrafficMetricEvents:  mongoDB.Collection("traffic_metric_events"),
 		LogRetention:         retention,
 	}
 	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
@@ -316,6 +320,53 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "sensitive_data", Value: 1}, {Key: "captured_at", Value: -1}},
 			Options: options.Index().SetName("sensitive_samples_tenant_sensitive_captured_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "traffic_metrics", db.TrafficMetrics, []mongo.IndexModel{
+		{
+			Keys: bson.D{
+				{Key: "tenant_id", Value: 1},
+				{Key: "project_id", Value: 1},
+				{Key: "endpoint_fingerprint", Value: 1},
+				{Key: "bucket_granularity", Value: 1},
+				{Key: "bucket_start", Value: 1},
+				{Key: "status_code", Value: 1},
+				{Key: "auth_observed", Value: 1},
+				{Key: "risk_level", Value: 1},
+			},
+			Options: options.Index().SetName("traffic_metrics_unique_bucket_dimensions").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "bucket_granularity", Value: 1}, {Key: "bucket_start", Value: -1}},
+			Options: options.Index().SetName("traffic_metrics_tenant_bucket"),
+		},
+		{
+			Keys:    bson.D{{Key: "endpoint_fingerprint", Value: 1}, {Key: "bucket_granularity", Value: 1}, {Key: "bucket_start", Value: -1}},
+			Options: options.Index().SetName("traffic_metrics_endpoint_bucket"),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "status_class", Value: 1}, {Key: "bucket_start", Value: -1}},
+			Options: options.Index().SetName("traffic_metrics_tenant_status_bucket"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "traffic_metric_events", db.TrafficMetricEvents, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "event_key", Value: 1}},
+			Options: options.Index().SetName("traffic_metric_events_event_key_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("traffic_metric_events_created_at_ttl").SetExpireAfterSeconds(ttlSeconds),
+		},
+		{
+			Keys:    bson.D{{Key: "endpoint_fingerprint", Value: 1}, {Key: "bucket_start", Value: -1}},
+			Options: options.Index().SetName("traffic_metric_events_endpoint_bucket"),
 		},
 	}); err != nil {
 		return err

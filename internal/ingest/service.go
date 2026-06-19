@@ -175,6 +175,7 @@ func ConversationToTrafficLog(conversation contracts.HTTPConversation) core.Traf
 		CaptureSource:  conversation.CaptureSource,
 		CaptureMode:    conversation.CaptureMode,
 		AgentID:        conversation.AgentID,
+		ConversationID: conversation.ID.OID,
 		CreatedAt:      conversation.CapturedAt.Date,
 		Method:         conversation.HTTP.Request.Method,
 		URL:            conversation.HTTP.Request.URL,

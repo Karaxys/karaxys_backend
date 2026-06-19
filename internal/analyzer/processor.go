@@ -32,6 +32,8 @@ type Processor struct {
 	ParametersColl       *mongo.Collection
 	TrafficSamplesColl   *mongo.Collection
 	SensitiveSamplesColl *mongo.Collection
+	TrafficMetricsColl   *mongo.Collection
+	MetricEventsColl     *mongo.Collection
 	EndpointSampleLimit  int
 }
 
@@ -59,6 +61,8 @@ func NewProcessor(db *mongo.Database, options ...ProcessorOptions) *Processor {
 		ParametersColl:       db.Collection("api_parameters"),
 		TrafficSamplesColl:   db.Collection("traffic_samples"),
 		SensitiveSamplesColl: db.Collection("sensitive_samples"),
+		TrafficMetricsColl:   db.Collection("traffic_metrics"),
+		MetricEventsColl:     db.Collection("traffic_metric_events"),
 		EndpointSampleLimit:  opts.EndpointSampleLimit,
 	}
 }
@@ -458,13 +462,15 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 	}
 	if err := e.saveSensitiveSample(context.TODO(), logEntry, baseURL, pathPattern, fingerprint, finalPII, sensitiveObservations, now); err != nil {
 		log.Printf("Sensitive Sample Update Error: %v", err)
-	} else {
-		piiMsg := ""
-		if len(detectedPII) > 0 {
-			piiMsg = " [PII FOUND]"
-		}
-		log.Printf("Analyzed Logs: %s -> %s%s", logEntry.Path, pathPattern, piiMsg)
 	}
+	if err := e.recordTrafficMetrics(context.TODO(), logEntry, baseURL, pathPattern, fingerprint, calculatedRisk, authObserved, len(finalPII) > 0, statusCode, now); err != nil {
+		log.Printf("Traffic Metrics Update Error: %v", err)
+	}
+	piiMsg := ""
+	if len(detectedPII) > 0 {
+		piiMsg = " [PII FOUND]"
+	}
+	log.Printf("Analyzed Logs: %s -> %s%s", logEntry.Path, pathPattern, piiMsg)
 }
 
 func (e *Processor) upsertParameters(ctx context.Context, logEntry core.TrafficLog, baseURL string, pathPattern string, fingerprint string, observations []endpoint.ParameterObservation) error {
@@ -553,6 +559,108 @@ func (e *Processor) saveSensitiveSample(ctx context.Context, logEntry core.Traff
 		return err
 	}
 	return pruneEndpointSamples(ctx, e.SensitiveSamplesColl, fingerprint, e.EndpointSampleLimit)
+}
+
+func (e *Processor) recordTrafficMetrics(ctx context.Context, logEntry core.TrafficLog, baseURL string, pathPattern string, fingerprint string, riskLevel string, auth bool, hasSensitiveData bool, statusCode int, now time.Time) error {
+	if e == nil || e.TrafficMetricsColl == nil || e.MetricEventsColl == nil {
+		return nil
+	}
+	eventID := trafficMetricEventID(logEntry, fingerprint)
+	if eventID == "" {
+		return nil
+	}
+	observed := observedAt(logEntry, now)
+	for _, granularity := range []string{core.TrafficMetricGranularityHour, core.TrafficMetricGranularityDay} {
+		bucketStart := metricBucketStart(observed, granularity)
+		eventKey := trafficMetricEventKey(eventID, fingerprint, granularity, bucketStart)
+		event := trafficMetricEventFromLog(logEntry, eventID, eventKey, fingerprint, granularity, bucketStart, now)
+		if _, err := e.MetricEventsColl.InsertOne(ctx, event); err != nil {
+			if mongo.IsDuplicateKeyError(err) {
+				continue
+			}
+			return err
+		}
+
+		filter, update := trafficMetricUpdate(logEntry, baseURL, pathPattern, fingerprint, riskLevel, auth, hasSensitiveData, statusCode, granularity, bucketStart, observed, now)
+		if _, err := e.TrafficMetricsColl.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true)); err != nil {
+			_, _ = e.MetricEventsColl.DeleteOne(ctx, bson.M{"event_key": eventKey})
+			return err
+		}
+	}
+	return nil
+}
+
+func trafficMetricEventFromLog(logEntry core.TrafficLog, eventID string, eventKey string, fingerprint string, granularity string, bucketStart time.Time, now time.Time) core.TrafficMetricEvent {
+	return core.TrafficMetricEvent{
+		SchemaVersion:       core.TrafficMetricEventSchemaV1,
+		EventKey:            eventKey,
+		EventID:             eventID,
+		TenantID:            logEntry.TenantID,
+		ProjectID:           logEntry.ProjectID,
+		EndpointFingerprint: fingerprint,
+		BucketGranularity:   granularity,
+		BucketStart:         bucketStart,
+		CreatedAt:           now,
+	}
+}
+
+func trafficMetricUpdate(logEntry core.TrafficLog, baseURL string, pathPattern string, fingerprint string, riskLevel string, auth bool, hasSensitiveData bool, statusCode int, granularity string, bucketStart time.Time, observed time.Time, now time.Time) (bson.M, bson.M) {
+	tenantID := logEntry.TenantID
+	projectID := logEntry.ProjectID
+	riskLevel = strings.TrimSpace(riskLevel)
+	if riskLevel == "" {
+		riskLevel = "LOW"
+	}
+
+	filter := bson.M{
+		"tenant_id":            tenantID,
+		"project_id":           projectID,
+		"endpoint_fingerprint": fingerprint,
+		"bucket_granularity":   granularity,
+		"bucket_start":         bucketStart,
+		"status_code":          statusCode,
+		"auth_observed":        auth,
+		"risk_level":           riskLevel,
+	}
+	setOnInsert := bson.M{
+		"schema_version":       core.TrafficMetricSchemaV1,
+		"tenant_id":            tenantID,
+		"project_id":           projectID,
+		"endpoint_fingerprint": fingerprint,
+		"method":               strings.ToUpper(strings.TrimSpace(logEntry.Method)),
+		"base_url":             baseURL,
+		"path_pattern":         pathPattern,
+		"bucket_granularity":   granularity,
+		"bucket_start":         bucketStart,
+		"status_code":          statusCode,
+		"status_class":         statusClass(statusCode),
+		"auth_observed":        auth,
+		"risk_level":           riskLevel,
+		"first_seen_at":        observed,
+		"created_at":           now,
+	}
+	setFields := bson.M{
+		"updated_at":    now,
+		"last_seen_at":  observed,
+		"method":        strings.ToUpper(strings.TrimSpace(logEntry.Method)),
+		"base_url":      baseURL,
+		"path_pattern":  pathPattern,
+		"status_class":  statusClass(statusCode),
+		"auth_observed": auth,
+		"risk_level":    riskLevel,
+	}
+	inc := bson.M{"request_count": int64(1)}
+	if statusCode >= 500 && statusCode <= 599 {
+		inc["error_count"] = int64(1)
+	}
+	if hasSensitiveData {
+		inc["sensitive_count"] = int64(1)
+	}
+	return filter, bson.M{
+		"$setOnInsert": setOnInsert,
+		"$set":         setFields,
+		"$inc":         inc,
+	}
 }
 
 func trafficSampleFromLog(logEntry core.TrafficLog, redactedLogEntry core.TrafficLog, baseURL string, host string, pathPattern string, fingerprint string, sensitiveData []string, tags []string, now time.Time) core.TrafficSample {
@@ -695,6 +803,60 @@ func observedAt(logEntry core.TrafficLog, fallback time.Time) time.Time {
 		return fallback
 	}
 	return logEntry.CreatedAt.UTC()
+}
+
+func metricBucketStart(observed time.Time, granularity string) time.Time {
+	observed = observed.UTC()
+	switch granularity {
+	case core.TrafficMetricGranularityDay:
+		year, month, day := observed.Date()
+		return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	default:
+		return observed.Truncate(time.Hour)
+	}
+}
+
+func trafficMetricEventID(logEntry core.TrafficLog, fingerprint string) string {
+	if conversationID := strings.TrimSpace(logEntry.ConversationID); conversationID != "" {
+		return "conversation:" + conversationID
+	}
+
+	observed := ""
+	if !logEntry.CreatedAt.IsZero() {
+		observed = logEntry.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	parts := []string{
+		logEntry.TenantID,
+		logEntry.ProjectID,
+		logEntry.AgentID,
+		strings.ToUpper(strings.TrimSpace(logEntry.Method)),
+		logEntry.URL,
+		logEntry.Path,
+		logEntry.RespStatus,
+		strconv.Itoa(responseStatusCode(logEntry)),
+		observed,
+		sha256Hex(logEntry.ReqBody),
+		sha256Hex(logEntry.RespBody),
+		fingerprint,
+	}
+	return "log:" + sha256Hex(strings.Join(parts, "\x00"))
+}
+
+func trafficMetricEventKey(eventID string, fingerprint string, granularity string, bucketStart time.Time) string {
+	keyMaterial := strings.Join([]string{
+		eventID,
+		fingerprint,
+		granularity,
+		bucketStart.UTC().Format(time.RFC3339Nano),
+	}, "\x00")
+	return sha256Hex(keyMaterial)
+}
+
+func statusClass(statusCode int) string {
+	if statusCode < 100 || statusCode > 599 {
+		return "unknown"
+	}
+	return strconv.Itoa(statusCode/100) + "xx"
 }
 
 func cappedPush(value string, limit int) bson.M {

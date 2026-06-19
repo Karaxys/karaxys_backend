@@ -50,6 +50,9 @@ func TestHandleConversationAcceptsValidConversation(t *testing.T) {
 	if saved.CaptureSource != "ebpf" || saved.CaptureMode != "container" || saved.AgentID != "agent-linux-01" {
 		t.Fatalf("unexpected capture metadata: source=%s mode=%s agent=%s", saved.CaptureSource, saved.CaptureMode, saved.AgentID)
 	}
+	if saved.ConversationID != "6650f8cb1c5e7c6c1f93a111" {
+		t.Fatalf("unexpected analyzer conversation id: %s", saved.ConversationID)
+	}
 	if saved.Method != http.MethodGet || saved.Host != "api.example.local" || saved.Path != "/api/v1/users" {
 		t.Fatalf("unexpected request mapping: %+v", saved)
 	}

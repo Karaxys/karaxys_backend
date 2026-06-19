@@ -139,6 +139,14 @@ location, field name, detected tags, and a redacted sample marker. It is separat
 from `traffic_samples` so the product can query sensitive evidence without
 scanning every traffic example.
 
+`traffic_metrics` stores aggregate hour/day counters using
+Prometheus-compatible label dimensions: tenant, project, endpoint fingerprint,
+method, normalized path, status code/class, auth observed, and risk level. These
+counters are intended for dashboard charts and API security trend queries
+without scanning short-retention raw logs. `traffic_metric_events` is a
+short-retention dedupe ledger keyed by captured conversation and bucket, so a
+replayed eBPF conversation does not double-increment hourly or daily metrics.
+
 ## Security Baseline
 
 Karaxys redacts common secrets before persistence in the current backend data
