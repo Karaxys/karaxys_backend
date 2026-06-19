@@ -2,6 +2,8 @@ package analyzer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"karaxys_backend/internal/analyzer/endpoint"
 	"karaxys_backend/internal/analyzer/pii"
 	"karaxys_backend/internal/analyzer/schema"
@@ -15,19 +17,49 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+const (
+	defaultEndpointSampleLimit = 20
+	maxStoredSampleBodyBytes   = 16 * 1024
+)
+
 type Processor struct {
-	InventoryColl  *mongo.Collection
-	ParametersColl *mongo.Collection
+	InventoryColl        *mongo.Collection
+	ParametersColl       *mongo.Collection
+	TrafficSamplesColl   *mongo.Collection
+	SensitiveSamplesColl *mongo.Collection
+	EndpointSampleLimit  int
 }
 
-func NewProcessor(db *mongo.Database) *Processor {
+type ProcessorOptions struct {
+	EndpointSampleLimit int
+}
+
+type sensitiveObservation struct {
+	Location string
+	Name     string
+	Value    string
+	Tags     []string
+}
+
+func NewProcessor(db *mongo.Database, options ...ProcessorOptions) *Processor {
+	opts := ProcessorOptions{EndpointSampleLimit: defaultEndpointSampleLimit}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.EndpointSampleLimit <= 0 {
+		opts.EndpointSampleLimit = defaultEndpointSampleLimit
+	}
 	return &Processor{
-		InventoryColl:  db.Collection("api_inventory"),
-		ParametersColl: db.Collection("api_parameters"),
+		InventoryColl:        db.Collection("api_inventory"),
+		ParametersColl:       db.Collection("api_parameters"),
+		TrafficSamplesColl:   db.Collection("traffic_samples"),
+		SensitiveSamplesColl: db.Collection("sensitive_samples"),
+		EndpointSampleLimit:  opts.EndpointSampleLimit,
 	}
 }
 
@@ -84,6 +116,102 @@ func scanPII(scope string, key string, value string, foundTags *[]string) {
 			}
 		}
 	}
+}
+
+func tagsForField(scope string, key string, value string) []string {
+	tags := []string{}
+	scanPII(scope, key, value, &tags)
+	return uniqueStrings(tags)
+}
+
+func detectSensitiveObservations(logEntry core.TrafficLog) []sensitiveObservation {
+	if isStaticResource(logEntry.Path) {
+		return nil
+	}
+	var observations []sensitiveObservation
+	for key, values := range logEntry.ReqHeaders {
+		for _, value := range values {
+			if tags := tagsForField("HEADER", key, value); len(tags) > 0 {
+				observations = append(observations, sensitiveObservation{
+					Location: endpoint.LocationHeader,
+					Name:     key,
+					Value:    value,
+					Tags:     tags,
+				})
+			}
+		}
+	}
+	for _, param := range endpoint.QueryParameters(logEntry.URL) {
+		if tags := tagsForField("BODY", param.Name, param.Value); len(tags) > 0 {
+			observations = append(observations, sensitiveObservation{
+				Location: endpoint.LocationQuery,
+				Name:     param.Name,
+				Value:    param.Value,
+				Tags:     tags,
+			})
+		}
+	}
+	for _, param := range endpoint.CookieParameters(logEntry.ReqHeaders) {
+		if tags := tagsForField("BODY", param.Name, param.Value); len(tags) > 0 {
+			observations = append(observations, sensitiveObservation{
+				Location: endpoint.LocationCookie,
+				Name:     param.Name,
+				Value:    param.Value,
+				Tags:     tags,
+			})
+		}
+	}
+	for key, value := range utils.FlattenJSON(logEntry.ReqBody) {
+		if tags := tagsForField("BODY", key, value); len(tags) > 0 {
+			observations = append(observations, sensitiveObservation{
+				Location: endpoint.LocationRequestBody,
+				Name:     key,
+				Value:    value,
+				Tags:     tags,
+			})
+		}
+	}
+	for key, values := range logEntry.RespHeaders {
+		for _, value := range values {
+			if tags := tagsForField("HEADER", key, value); len(tags) > 0 {
+				observations = append(observations, sensitiveObservation{
+					Location: "response_header",
+					Name:     key,
+					Value:    value,
+					Tags:     tags,
+				})
+			}
+		}
+	}
+	for key, value := range utils.FlattenJSON(logEntry.RespBody) {
+		if tags := tagsForField("BODY", key, value); len(tags) > 0 {
+			observations = append(observations, sensitiveObservation{
+				Location: endpoint.LocationResponseBody,
+				Name:     key,
+				Value:    value,
+				Tags:     tags,
+			})
+		}
+	}
+	return observations
+}
+
+func tagsFromSensitiveObservations(observations []sensitiveObservation) []string {
+	var tags []string
+	for _, observation := range observations {
+		tags = append(tags, observation.Tags...)
+	}
+	return uniqueStrings(tags)
+}
+
+func responseTagsFromSensitiveObservations(observations []sensitiveObservation) []string {
+	var tags []string
+	for _, observation := range observations {
+		if observation.Location == endpoint.LocationResponseBody || observation.Location == "response_header" {
+			tags = append(tags, observation.Tags...)
+		}
+	}
+	return uniqueStrings(tags)
 }
 
 func calculateRiskLevel(piiTags []string) string {
@@ -208,36 +336,14 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 	host := normalizedHost(logEntry.Host, logEntry.URL)
 	fingerprint := endpoint.Fingerprint(logEntry.TenantID, logEntry.ProjectID, logEntry.Method, baseURL, pathPattern)
 	redactedLogEntry := redact.TrafficLog(logEntry)
-	detectedPII := []string{}
-	responsePII := []string{}
+	sensitiveObservations := detectSensitiveObservations(logEntry)
+	detectedPII := tagsFromSensitiveObservations(sensitiveObservations)
+	responsePII := responseTagsFromSensitiveObservations(sensitiveObservations)
 	if !isStaticResource(logEntry.Path) {
-		for k, vals := range logEntry.ReqHeaders {
-			for _, v := range vals {
-				scanPII("HEADER", k, v, &detectedPII)
-			}
-		}
-
-		flatReq := utils.FlattenJSON(logEntry.ReqBody)
-		for k, v := range flatReq {
-			scanPII("BODY", k, v, &detectedPII)
-		}
-
-		flatResp := utils.FlattenJSON(logEntry.RespBody)
-		for k, v := range flatResp {
-			scanPII("BODY", k, v, &detectedPII)
-			scanPII("BODY", k, v, &responsePII)
-		}
-		scanPII("BODY", "url", logEntry.URL, &detectedPII)
+		detectedPII = append(detectedPII, tagsForField("BODY", "url", logEntry.URL)...)
 	}
 
-	uniquePII := make(map[string]bool)
-	finalPII := []string{}
-	for _, tag := range detectedPII {
-		if !uniquePII[tag] {
-			uniquePII[tag] = true
-			finalPII = append(finalPII, tag)
-		}
-	}
+	finalPII := uniqueStrings(detectedPII)
 
 	calculatedRisk := calculateRiskLevel(finalPII)
 	finalResponsePII := uniqueStrings(responsePII)
@@ -346,6 +452,12 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 	}
 	if err := e.upsertParameters(context.TODO(), logEntry, baseURL, pathPattern, fingerprint, observations); err != nil {
 		log.Printf("Parameter Update Error: %v", err)
+	}
+	if err := e.saveTrafficSample(context.TODO(), logEntry, redactedLogEntry, baseURL, host, pathPattern, fingerprint, finalPII, tags, now); err != nil {
+		log.Printf("Traffic Sample Update Error: %v", err)
+	}
+	if err := e.saveSensitiveSample(context.TODO(), logEntry, baseURL, pathPattern, fingerprint, finalPII, sensitiveObservations, now); err != nil {
+		log.Printf("Sensitive Sample Update Error: %v", err)
 	} else {
 		piiMsg := ""
 		if len(detectedPII) > 0 {
@@ -416,6 +528,132 @@ func (e *Processor) upsertParameters(ctx context.Context, logEntry core.TrafficL
 		}
 	}
 	return nil
+}
+
+func (e *Processor) saveTrafficSample(ctx context.Context, logEntry core.TrafficLog, redactedLogEntry core.TrafficLog, baseURL string, host string, pathPattern string, fingerprint string, sensitiveData []string, tags []string, now time.Time) error {
+	if e == nil || e.TrafficSamplesColl == nil {
+		return nil
+	}
+	sample := trafficSampleFromLog(logEntry, redactedLogEntry, baseURL, host, pathPattern, fingerprint, sensitiveData, tags, now)
+	if _, err := e.TrafficSamplesColl.InsertOne(ctx, sample); err != nil {
+		return err
+	}
+	return pruneEndpointSamples(ctx, e.TrafficSamplesColl, fingerprint, e.EndpointSampleLimit)
+}
+
+func (e *Processor) saveSensitiveSample(ctx context.Context, logEntry core.TrafficLog, baseURL string, pathPattern string, fingerprint string, sensitiveData []string, observations []sensitiveObservation, now time.Time) error {
+	if e == nil || e.SensitiveSamplesColl == nil || len(sensitiveData) == 0 || len(observations) == 0 {
+		return nil
+	}
+	sample := sensitiveSampleFromObservations(logEntry, baseURL, pathPattern, fingerprint, sensitiveData, observations, now)
+	if len(sample.Occurrences) == 0 {
+		return nil
+	}
+	if _, err := e.SensitiveSamplesColl.InsertOne(ctx, sample); err != nil {
+		return err
+	}
+	return pruneEndpointSamples(ctx, e.SensitiveSamplesColl, fingerprint, e.EndpointSampleLimit)
+}
+
+func trafficSampleFromLog(logEntry core.TrafficLog, redactedLogEntry core.TrafficLog, baseURL string, host string, pathPattern string, fingerprint string, sensitiveData []string, tags []string, now time.Time) core.TrafficSample {
+	reqBody, reqTruncated := sampleExcerpt(redactedLogEntry.ReqBody, maxStoredSampleBodyBytes)
+	respBody, respTruncated := sampleExcerpt(redactedLogEntry.RespBody, maxStoredSampleBodyBytes)
+	return core.TrafficSample{
+		SchemaVersion:       core.TrafficSampleSchemaV1,
+		TenantID:            logEntry.TenantID,
+		ProjectID:           logEntry.ProjectID,
+		EndpointFingerprint: fingerprint,
+		Method:              strings.ToUpper(strings.TrimSpace(logEntry.Method)),
+		BaseURL:             baseURL,
+		Host:                host,
+		PathPattern:         pathPattern,
+		OriginalPath:        logEntry.Path,
+		URL:                 redactedLogEntry.URL,
+		AgentID:             logEntry.AgentID,
+		CaptureSource:       logEntry.CaptureSource,
+		CaptureMode:         logEntry.CaptureMode,
+		ReqHeaders:          redactedLogEntry.ReqHeaders,
+		ReqBody:             reqBody,
+		ReqBodySHA256:       sha256Hex(redactedLogEntry.ReqBody),
+		ReqBodyTruncated:    reqTruncated,
+		RespStatus:          logEntry.RespStatus,
+		RespStatusCode:      responseStatusCode(logEntry),
+		RespHeaders:         redactedLogEntry.RespHeaders,
+		RespBody:            respBody,
+		RespBodySHA256:      sha256Hex(redactedLogEntry.RespBody),
+		RespBodyTruncated:   respTruncated,
+		SensitiveData:       uniqueStrings(sensitiveData),
+		Tags:                uniqueStrings(tags),
+		CapturedAt:          observedAt(logEntry, now),
+		CreatedAt:           now,
+	}
+}
+
+func sensitiveSampleFromObservations(logEntry core.TrafficLog, baseURL string, pathPattern string, fingerprint string, sensitiveData []string, observations []sensitiveObservation, now time.Time) core.SensitiveSample {
+	occurrences := make([]core.SensitiveOccurrence, 0, len(observations))
+	for _, observation := range observations {
+		if len(observation.Tags) == 0 {
+			continue
+		}
+		occurrences = append(occurrences, core.SensitiveOccurrence{
+			Location: observation.Location,
+			Name:     observation.Name,
+			Tags:     uniqueStrings(observation.Tags),
+			Sample:   redactedParameterSample(observation.Value, observation.Tags),
+		})
+	}
+	return core.SensitiveSample{
+		SchemaVersion:       core.SensitiveSampleSchemaV1,
+		TenantID:            logEntry.TenantID,
+		ProjectID:           logEntry.ProjectID,
+		EndpointFingerprint: fingerprint,
+		Method:              strings.ToUpper(strings.TrimSpace(logEntry.Method)),
+		BaseURL:             baseURL,
+		PathPattern:         pathPattern,
+		OriginalPath:        logEntry.Path,
+		AgentID:             logEntry.AgentID,
+		CaptureSource:       logEntry.CaptureSource,
+		SensitiveData:       uniqueStrings(sensitiveData),
+		Occurrences:         occurrences,
+		CapturedAt:          observedAt(logEntry, now),
+		CreatedAt:           now,
+	}
+}
+
+func pruneEndpointSamples(ctx context.Context, collection *mongo.Collection, fingerprint string, limit int) error {
+	if collection == nil || strings.TrimSpace(fingerprint) == "" || limit <= 0 {
+		return nil
+	}
+	findOptions := options.Find().
+		SetSort(bson.D{{Key: "captured_at", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(int64(limit)).
+		SetProjection(bson.M{"_id": 1})
+	cursor, err := collection.Find(ctx, bson.M{"endpoint_fingerprint": fingerprint}, findOptions)
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	var ids []primitive.ObjectID
+	for cursor.Next(ctx) {
+		var item struct {
+			ID primitive.ObjectID `bson:"_id"`
+		}
+		if err := cursor.Decode(&item); err != nil {
+			return err
+		}
+		if !item.ID.IsZero() {
+			ids = append(ids, item.ID)
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err = collection.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	return err
 }
 
 func parameterObservations(pathParams []endpoint.ParameterObservation, logEntry core.TrafficLog, redactedLogEntry core.TrafficLog, reqSchema map[string]string, respSchema map[string]string) []endpoint.ParameterObservation {
@@ -618,6 +856,24 @@ func redactedParameterSample(value string, sensitiveTags []string) string {
 		return redact.Marker
 	}
 	return redact.Text(value)
+}
+
+func sampleExcerpt(value string, limit int) (string, bool) {
+	if value == "" || limit <= 0 {
+		return "", false
+	}
+	if len(value) <= limit {
+		return value, false
+	}
+	return value[:limit], true
+}
+
+func sha256Hex(value string) string {
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func uniqueStrings(values []string) []string {

@@ -38,6 +38,8 @@ type DB struct {
 	AgentEnrollments     *mongo.Collection
 	Agents               *mongo.Collection
 	APIParameters        *mongo.Collection
+	TrafficSamples       *mongo.Collection
+	SensitiveSamples     *mongo.Collection
 	LogRetention         LogRetention
 }
 
@@ -104,6 +106,8 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		AgentEnrollments:     mongoDB.Collection("agent_enrollments"),
 		Agents:               mongoDB.Collection("agents"),
 		APIParameters:        mongoDB.Collection("api_parameters"),
+		TrafficSamples:       mongoDB.Collection("traffic_samples"),
+		SensitiveSamples:     mongoDB.Collection("sensitive_samples"),
 		LogRetention:         retention,
 	}
 	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
@@ -278,6 +282,40 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "sensitive_data", Value: 1}, {Key: "updated_at", Value: -1}},
 			Options: options.Index().SetName("api_parameters_sensitive_updated_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "traffic_samples", db.TrafficSamples, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "captured_at", Value: 1}},
+			Options: options.Index().SetName("traffic_samples_captured_at_ttl").SetExpireAfterSeconds(ttlSeconds),
+		},
+		{
+			Keys:    bson.D{{Key: "endpoint_fingerprint", Value: 1}, {Key: "captured_at", Value: -1}},
+			Options: options.Index().SetName("traffic_samples_endpoint_captured_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "captured_at", Value: -1}},
+			Options: options.Index().SetName("traffic_samples_tenant_captured_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "sensitive_samples", db.SensitiveSamples, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "captured_at", Value: 1}},
+			Options: options.Index().SetName("sensitive_samples_captured_at_ttl").SetExpireAfterSeconds(ttlSeconds),
+		},
+		{
+			Keys:    bson.D{{Key: "endpoint_fingerprint", Value: 1}, {Key: "captured_at", Value: -1}},
+			Options: options.Index().SetName("sensitive_samples_endpoint_captured_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "sensitive_data", Value: 1}, {Key: "captured_at", Value: -1}},
+			Options: options.Index().SetName("sensitive_samples_tenant_sensitive_captured_at"),
 		},
 	}); err != nil {
 		return err

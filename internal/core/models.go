@@ -8,7 +8,11 @@ import (
 
 var ErrTrafficLogDropped = errors.New("traffic log dropped by retention policy")
 
-const InventorySchemaV2 = "api.inventory.v2"
+const (
+	InventorySchemaV2       = "api.inventory.v2"
+	TrafficSampleSchemaV1   = "traffic.sample.v1"
+	SensitiveSampleSchemaV1 = "sensitive.sample.v1"
+)
 
 type TrafficLog struct {
 	ID             primitive.ObjectID  `bson:"_id,omitempty"`
@@ -289,6 +293,62 @@ type APIParameter struct {
 	LastSeenAt          time.Time          `bson:"last_seen_at,omitempty"`
 	CreatedAt           time.Time          `bson:"created_at"`
 	UpdatedAt           time.Time          `bson:"updated_at"`
+}
+
+type TrafficSample struct {
+	ID                  primitive.ObjectID  `bson:"_id,omitempty"`
+	SchemaVersion       string              `bson:"schema_version"`
+	TenantID            string              `bson:"tenant_id,omitempty"`
+	ProjectID           string              `bson:"project_id,omitempty"`
+	EndpointFingerprint string              `bson:"endpoint_fingerprint"`
+	Method              string              `bson:"method"`
+	BaseURL             string              `bson:"base_url"`
+	Host                string              `bson:"host,omitempty"`
+	PathPattern         string              `bson:"path_pattern"`
+	OriginalPath        string              `bson:"original_path"`
+	URL                 string              `bson:"url,omitempty"`
+	AgentID             string              `bson:"agent_id,omitempty"`
+	CaptureSource       string              `bson:"capture_source,omitempty"`
+	CaptureMode         string              `bson:"capture_mode,omitempty"`
+	ReqHeaders          map[string][]string `bson:"req_headers,omitempty"`
+	ReqBody             string              `bson:"req_body,omitempty"`
+	ReqBodySHA256       string              `bson:"req_body_sha256,omitempty"`
+	ReqBodyTruncated    bool                `bson:"req_body_truncated,omitempty"`
+	RespStatus          string              `bson:"resp_status,omitempty"`
+	RespStatusCode      int                 `bson:"resp_status_code,omitempty"`
+	RespHeaders         map[string][]string `bson:"resp_headers,omitempty"`
+	RespBody            string              `bson:"resp_body,omitempty"`
+	RespBodySHA256      string              `bson:"resp_body_sha256,omitempty"`
+	RespBodyTruncated   bool                `bson:"resp_body_truncated,omitempty"`
+	SensitiveData       []string            `bson:"sensitive_data,omitempty"`
+	Tags                []string            `bson:"tags,omitempty"`
+	CapturedAt          time.Time           `bson:"captured_at"`
+	CreatedAt           time.Time           `bson:"created_at"`
+}
+
+type SensitiveOccurrence struct {
+	Location string   `bson:"location" json:"location"`
+	Name     string   `bson:"name" json:"name"`
+	Tags     []string `bson:"tags" json:"tags"`
+	Sample   string   `bson:"sample,omitempty" json:"sample,omitempty"`
+}
+
+type SensitiveSample struct {
+	ID                  primitive.ObjectID    `bson:"_id,omitempty"`
+	SchemaVersion       string                `bson:"schema_version"`
+	TenantID            string                `bson:"tenant_id,omitempty"`
+	ProjectID           string                `bson:"project_id,omitempty"`
+	EndpointFingerprint string                `bson:"endpoint_fingerprint"`
+	Method              string                `bson:"method"`
+	BaseURL             string                `bson:"base_url"`
+	PathPattern         string                `bson:"path_pattern"`
+	OriginalPath        string                `bson:"original_path"`
+	AgentID             string                `bson:"agent_id,omitempty"`
+	CaptureSource       string                `bson:"capture_source,omitempty"`
+	SensitiveData       []string              `bson:"sensitive_data"`
+	Occurrences         []SensitiveOccurrence `bson:"occurrences"`
+	CapturedAt          time.Time             `bson:"captured_at"`
+	CreatedAt           time.Time             `bson:"created_at"`
 }
 
 type ScanResult struct {

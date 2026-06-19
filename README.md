@@ -129,6 +129,16 @@ fingerprint, location, and name. Locations currently include path, query,
 header, cookie, request body, and response body. Sample values are capped and
 stored only after redaction.
 
+`traffic_samples` stores short-retention redacted HTTP examples keyed by
+endpoint fingerprint. The analyzer keeps the latest 20 samples per endpoint by
+default, stores only 16 KiB request/response body excerpts, and records SHA-256
+hashes for the redacted full bodies.
+
+`sensitive_samples` stores the security evidence view of sensitive observations:
+location, field name, detected tags, and a redacted sample marker. It is separate
+from `traffic_samples` so the product can query sensitive evidence without
+scanning every traffic example.
+
 ## Security Baseline
 
 Karaxys redacts common secrets before persistence in the current backend data
