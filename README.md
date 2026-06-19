@@ -21,6 +21,7 @@ Default local values:
 - `MONGO_DB_NAME=karaxys`
 - `KARAXYS_REDIS_ADDR=127.0.0.1:6379`
 - `KARAXYS_OBJECTSTORE_ENDPOINT=http://127.0.0.1:9000`
+- `KARAXYS_QUEUE_ENABLED=false`
 - `KARAXYS_QUEUE_BROKERS=127.0.0.1:19092`
 - `TRAFFIC_LOG_MAX_EVENTS=1000`
 - `TRAFFIC_LOG_TTL_HOURS=24`
@@ -50,6 +51,14 @@ Start the API server only:
 ```sh
 KARAXYS_API_KEY=dev-api-key \
 make api
+```
+
+Start the API server with Phase 4 queue publishing enabled:
+
+```sh
+make infra
+KARAXYS_API_KEY=dev-api-key \
+make api-queued
 ```
 
 `KARAXYS_API_KEY` is a compatibility key for local automation. The normal
@@ -208,6 +217,11 @@ local/self-hosted broker. The initial topics are:
 interfaces, an in-memory test broker, and a `franz-go` Kafka-compatible backend.
 Docker Compose starts Redpanda and runs `rpk topic create` through
 `redpanda-init` for local topic bootstrap.
+
+When `KARAXYS_QUEUE_ENABLED=true`, `POST /v1/ingest/conversations` persists the
+redacted log/conversation documents and publishes a reference event to
+`karaxys.http.conversations`. The event contains IDs and request metadata only;
+raw headers and bodies are not sent to the broker.
 
 ## Security Baseline
 

@@ -28,6 +28,10 @@ const (
 	EventDeadLetterV1       = "queue.dead_letter.v1"
 )
 
+const (
+	PayloadHTTPConversationPersistedV1 = "http.conversation.persisted.v1"
+)
+
 var DefaultTopics = []string{
 	TopicHTTPConversations,
 	TopicAnalyzerJobs,
@@ -76,6 +80,21 @@ type AnalyzerJob struct {
 	ConversationID string    `json:"conversation_id"`
 	TrafficLogID   string    `json:"traffic_log_id,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+type HTTPConversationEvent struct {
+	SchemaVersion  string    `json:"schema_version"`
+	ConversationID string    `json:"conversation_id"`
+	TenantID       string    `json:"tenant_id,omitempty"`
+	ProjectID      string    `json:"project_id,omitempty"`
+	AgentID        string    `json:"agent_id,omitempty"`
+	CaptureSource  string    `json:"capture_source,omitempty"`
+	CaptureMode    string    `json:"capture_mode,omitempty"`
+	CapturedAt     time.Time `json:"captured_at"`
+	Method         string    `json:"method"`
+	Host           string    `json:"host"`
+	Path           string    `json:"path"`
+	ResponseStatus int       `json:"response_status,omitempty"`
 }
 
 type DeadLetter struct {
@@ -187,4 +206,12 @@ func DecodeEnvelope(message Message) (Envelope, error) {
 
 func NormalizeTopic(topic string) string {
 	return strings.TrimSpace(topic)
+}
+
+func HTTPConversationIdempotencyKey(conversationID string) string {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return ""
+	}
+	return "http_conversation:" + conversationID
 }

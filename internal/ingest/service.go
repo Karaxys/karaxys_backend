@@ -12,6 +12,7 @@ import (
 
 	"karaxys_backend/internal/contracts"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/queue"
 	"karaxys_backend/internal/security/redact"
 )
 
@@ -50,6 +51,7 @@ type AgentAuthenticator func(token string) (*AgentAuth, bool)
 type Service struct {
 	Store              LogStore
 	Analyzer           Analyzer
+	Publisher          EventPublisher
 	AgentToken         string
 	AgentAuthenticator AgentAuthenticator
 	MaxBodyBytes       int64
@@ -154,7 +156,14 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if s.Analyzer != nil {
+	if s.Publisher != nil {
+		if err := s.Publisher.PublishConversation(r.Context(), ConversationToQueueEvent(conversation)); err != nil {
+			s.recordIngestionLog("failed", conversation, "conversation event publish failed: "+err.Error())
+			s.recordDeadLetter("conversation_event_publish_failed", raw, r)
+			http.Error(w, "Failed to enqueue conversation", http.StatusInternalServerError)
+			return
+		}
+	} else if s.Analyzer != nil {
 		s.Analyzer.ProcessLog(logEntry)
 	}
 	s.recordIngestionLog("accepted", conversation, "")
@@ -215,6 +224,23 @@ func ConversationToTrafficConversation(conversation contracts.HTTPConversation) 
 		RespStatusCode: respStatusCode,
 		RespHeaders:    conversation.HTTP.Response.Headers,
 		RespBody:       conversation.HTTP.Response.Body,
+	}
+}
+
+func ConversationToQueueEvent(conversation contracts.HTTPConversation) queue.HTTPConversationEvent {
+	return queue.HTTPConversationEvent{
+		SchemaVersion:  queue.EventHTTPConversationV1,
+		ConversationID: conversation.ID.OID,
+		TenantID:       conversation.TenantID,
+		ProjectID:      conversation.ProjectID,
+		AgentID:        conversation.AgentID,
+		CaptureSource:  conversation.CaptureSource,
+		CaptureMode:    conversation.CaptureMode,
+		CapturedAt:     conversation.CapturedAt.Date,
+		Method:         conversation.HTTP.Request.Method,
+		Host:           conversation.HTTP.Request.Host,
+		Path:           analyzerPath(conversation.HTTP.Request),
+		ResponseStatus: responseStatusCode(conversation.HTTP.Response.StatusCode),
 	}
 }
 

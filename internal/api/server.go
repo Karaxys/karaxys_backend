@@ -11,6 +11,7 @@ import (
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/ingest"
+	"karaxys_backend/internal/queue"
 	"karaxys_backend/internal/scanplan"
 	"karaxys_backend/internal/security/scansecrets"
 	"log"
@@ -25,9 +26,10 @@ import (
 )
 
 type Server struct {
-	DB     *db.DB
-	DBName string
-	Ingest *ingest.Service
+	DB            *db.DB
+	DBName        string
+	Ingest        *ingest.Service
+	queueProducer queue.Producer
 }
 
 func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Server {
@@ -39,11 +41,13 @@ func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Ser
 		processor = analyzer.NewProcessor(db.Client.Database(dbName))
 	}
 
-	return &Server{
+	server := &Server{
 		DB:     db,
 		DBName: dbName,
 		Ingest: ingest.NewService(db, processor, os.Getenv("KARAXYS_AGENT_TOKEN")),
 	}
+	server.configureIngestQueuePublisherFromEnv()
+	return server
 }
 
 func (s *Server) Start() {
@@ -101,6 +105,40 @@ func (s *Server) middlewareOptionsFromEnv() MiddlewareOptions {
 		AllowedOrigins:    splitCSVEnv("KARAXYS_ALLOWED_ORIGINS", []string{"http://localhost:7000"}),
 		MaxWriteBodyBytes: int64EnvDefault("KARAXYS_MAX_WRITE_BYTES", DefaultMaxWriteBodyBytes),
 	}
+}
+
+func (s *Server) configureIngestQueuePublisherFromEnv() {
+	if s == nil || s.Ingest == nil || !queuePublishingEnabled() {
+		return
+	}
+	cfg := queue.LoadKafkaConfigFromEnv([]string{queue.TopicHTTPConversations})
+	producer, err := queue.NewKafkaProducer(cfg)
+	if err != nil {
+		if config.IsProduction() {
+			log.Fatalf("Kafka-compatible conversation queue is required in production: %v", err)
+		}
+		log.Printf("Conversation queue publishing disabled: %v", err)
+		return
+	}
+	s.queueProducer = producer
+	s.Ingest.Publisher = ingest.NewQueuePublisher(producer)
+	log.Printf("Conversation queue publishing enabled brokers=%s topic=%s", strings.Join(cfg.Brokers, ","), queue.TopicHTTPConversations)
+}
+
+func queuePublishingEnabled() bool {
+	if config.IsProduction() {
+		return true
+	}
+	raw := strings.TrimSpace(os.Getenv("KARAXYS_QUEUE_ENABLED"))
+	if raw == "" {
+		return false
+	}
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		log.Printf("Invalid KARAXYS_QUEUE_ENABLED value %q; queue publishing disabled", raw)
+		return false
+	}
+	return enabled
 }
 
 func splitCSVEnv(key string, fallback []string) []string {

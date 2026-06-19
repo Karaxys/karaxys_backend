@@ -2,16 +2,20 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"karaxys_backend/internal/contracts"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/queue"
 )
 
 func TestHandleConversationAcceptsValidConversation(t *testing.T) {
@@ -116,6 +120,71 @@ func TestHandleConversationAcceptsDynamicAgentTokenAndBindsIdentity(t *testing.T
 	}
 }
 
+func TestHandleConversationPublishesConversationEventInsteadOfInlineAnalyzer(t *testing.T) {
+	store := &fakeStore{}
+	analyzer := &fakeAnalyzer{}
+	publisher := &fakePublisher{}
+	service := NewService(store, analyzer, "agent-token")
+	service.Publisher = publisher
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/conversations", bytes.NewReader(loadExample(t)))
+	req.Header.Set("Authorization", "Bearer agent-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	service.HandleConversation(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if analyzer.count != 0 {
+		t.Fatalf("expected inline analyzer not to run when queue publisher is configured, got %d", analyzer.count)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one published event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.ConversationID != "6650f8cb1c5e7c6c1f93a111" || event.CaptureSource != "ebpf" || event.Method != http.MethodGet {
+		t.Fatalf("unexpected published event: %+v", event)
+	}
+	if event.Host != "api.example.local" || event.Path != "/api/v1/users" || event.ResponseStatus != 200 {
+		t.Fatalf("unexpected published request metadata: %+v", event)
+	}
+	if len(store.ingestionLogs) != 1 || store.ingestionLogs[0].Status != "accepted" {
+		t.Fatalf("expected accepted ingestion log, got %+v", store.ingestionLogs)
+	}
+}
+
+func TestHandleConversationFailsClosedWhenConversationEventPublishFails(t *testing.T) {
+	store := &fakeStore{}
+	analyzer := &fakeAnalyzer{}
+	service := NewService(store, analyzer, "agent-token")
+	service.Publisher = &fakePublisher{err: errors.New("queue unavailable")}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/conversations", bytes.NewReader(loadExample(t)))
+	req.Header.Set("Authorization", "Bearer agent-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	service.HandleConversation(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if analyzer.count != 0 {
+		t.Fatalf("expected inline analyzer not to run after queue publish failure, got %d", analyzer.count)
+	}
+	if len(store.logs) != 1 || len(store.conversations) != 1 {
+		t.Fatalf("expected persisted log and conversation before publish failure, got logs=%d conversations=%d", len(store.logs), len(store.conversations))
+	}
+	if len(store.ingestionLogs) != 1 || store.ingestionLogs[0].Status != "failed" {
+		t.Fatalf("expected failed ingestion log, got %+v", store.ingestionLogs)
+	}
+	if len(store.deadLetters) != 1 || store.deadLetters[0].Reason != "conversation_event_publish_failed" {
+		t.Fatalf("expected publish failure dead letter, got %+v", store.deadLetters)
+	}
+}
+
 func TestHandleConversationRejectsAgentIdentityMismatch(t *testing.T) {
 	store := &fakeStore{}
 	service := NewService(store, nil, "", func(token string) (*AgentAuth, bool) {
@@ -150,6 +219,60 @@ func TestHandleConversationRejectsAgentIdentityMismatch(t *testing.T) {
 	}
 	if len(store.deadLetters) != 1 || store.deadLetters[0].Reason != "agent_identity_mismatch" {
 		t.Fatalf("expected identity mismatch dead letter, got %+v", store.deadLetters)
+	}
+}
+
+func TestQueuePublisherProducesConversationEnvelope(t *testing.T) {
+	broker := queue.NewMemoryBroker(1)
+	publisher := NewQueuePublisher(broker.Producer())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	event := queue.HTTPConversationEvent{
+		SchemaVersion:  queue.EventHTTPConversationV1,
+		ConversationID: "6650f8cb1c5e7c6c1f93a111",
+		TenantID:       "tenant-1",
+		ProjectID:      "project-1",
+		AgentID:        "agent-1",
+		CaptureSource:  "ebpf",
+		CaptureMode:    "container",
+		CapturedAt:     time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC),
+		Method:         http.MethodPost,
+		Host:           "api.example.local",
+		Path:           "/users/login",
+		ResponseStatus: 200,
+	}
+
+	if err := publisher.PublishConversation(ctx, event); err != nil {
+		t.Fatalf("publish conversation: %v", err)
+	}
+	message, err := broker.Consumer(queue.TopicHTTPConversations).Consume(ctx)
+	if err != nil {
+		t.Fatalf("consume published message: %v", err)
+	}
+	if message.Key != queue.HTTPConversationIdempotencyKey(event.ConversationID) {
+		t.Fatalf("unexpected message key: %s", message.Key)
+	}
+	if message.Headers[queue.HeaderTenantID] != "tenant-1" || message.Headers[queue.HeaderAgentID] != "agent-1" {
+		t.Fatalf("unexpected message headers: %+v", message.Headers)
+	}
+
+	envelope, err := queue.DecodeEnvelope(message)
+	if err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if envelope.PayloadType != queue.PayloadHTTPConversationPersistedV1 || envelope.IdempotencyKey != message.Key {
+		t.Fatalf("unexpected envelope: %+v", envelope)
+	}
+	var payload queue.HTTPConversationEvent
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.ConversationID != event.ConversationID || payload.Path != event.Path {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if strings.Contains(string(message.Value), "Authorization") || strings.Contains(string(message.Value), "password") {
+		t.Fatalf("queue message contains sensitive raw HTTP material: %s", string(message.Value))
 	}
 }
 
@@ -372,6 +495,19 @@ type fakeAnalyzer struct {
 func (f *fakeAnalyzer) ProcessLog(logEntry core.TrafficLog) {
 	f.count++
 	f.lastLog = logEntry
+}
+
+type fakePublisher struct {
+	events []queue.HTTPConversationEvent
+	err    error
+}
+
+func (f *fakePublisher) PublishConversation(_ context.Context, event queue.HTTPConversationEvent) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.events = append(f.events, event)
+	return nil
 }
 
 func loadExample(t *testing.T) []byte {

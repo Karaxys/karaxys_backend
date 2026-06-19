@@ -1,4 +1,4 @@
-.PHONY: mongo redis minio redpanda infra api scanner-worker legacy-proxy test
+.PHONY: mongo redis minio redpanda infra api api-queued scanner-worker legacy-proxy test
 
 MONGO_URI ?= mongodb://127.0.0.1:27017/?directConnection=true
 MONGO_DB_NAME ?= karaxys
@@ -27,6 +27,9 @@ infra:
 
 api:
 	go run ./cmd/api-server
+
+api-queued:
+	KARAXYS_QUEUE_ENABLED=true go run ./cmd/api-server
 
 scanner-worker:
 	go run ./cmd/scanner-worker
