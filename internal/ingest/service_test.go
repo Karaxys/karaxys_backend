@@ -147,11 +147,46 @@ func TestHandleConversationPublishesConversationEventInsteadOfInlineAnalyzer(t *
 	if event.ConversationID != "6650f8cb1c5e7c6c1f93a111" || event.CaptureSource != "ebpf" || event.Method != http.MethodGet {
 		t.Fatalf("unexpected published event: %+v", event)
 	}
+	if event.ConversationHash == "" {
+		t.Fatalf("expected published event to include conversation hash")
+	}
 	if event.Host != "api.example.local" || event.Path != "/api/v1/users" || event.ResponseStatus != 200 {
 		t.Fatalf("unexpected published request metadata: %+v", event)
 	}
 	if len(store.ingestionLogs) != 1 || store.ingestionLogs[0].Status != "accepted" {
 		t.Fatalf("expected accepted ingestion log, got %+v", store.ingestionLogs)
+	}
+}
+
+func TestHandleConversationReturnsDuplicateWithoutAnalysisOrPublish(t *testing.T) {
+	store := &fakeStore{err: core.ErrTrafficLogDuplicate}
+	analyzer := &fakeAnalyzer{}
+	publisher := &fakePublisher{}
+	service := NewService(store, analyzer, "agent-token")
+	service.Publisher = publisher
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/conversations", bytes.NewReader(loadExample(t)))
+	req.Header.Set("Authorization", "Bearer agent-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	service.HandleConversation(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "duplicate" {
+		t.Fatalf("expected duplicate response, got %+v", response)
+	}
+	if analyzer.count != 0 || len(publisher.events) != 0 || len(store.conversations) != 0 {
+		t.Fatalf("duplicate should not analyze, publish, or save conversation: analyzer=%d published=%d conversations=%d", analyzer.count, len(publisher.events), len(store.conversations))
+	}
+	if len(store.ingestionLogs) != 1 || store.ingestionLogs[0].Status != "duplicate" {
+		t.Fatalf("expected duplicate ingestion log, got %+v", store.ingestionLogs)
 	}
 }
 
@@ -182,6 +217,28 @@ func TestHandleConversationFailsClosedWhenConversationEventPublishFails(t *testi
 	}
 	if len(store.deadLetters) != 1 || store.deadLetters[0].Reason != "conversation_event_publish_failed" {
 		t.Fatalf("expected publish failure dead letter, got %+v", store.deadLetters)
+	}
+}
+
+func TestConversationHashIgnoresConversationObjectID(t *testing.T) {
+	var first contracts.HTTPConversation
+	if err := json.Unmarshal(loadExample(t), &first); err != nil {
+		t.Fatalf("decode first example: %v", err)
+	}
+	second := first
+	second.ID.OID = "6650f8cb1c5e7c6c1f93a222"
+
+	firstHash := ConversationHash(first)
+	secondHash := ConversationHash(second)
+	if firstHash == "" || secondHash == "" {
+		t.Fatalf("expected non-empty hashes: first=%q second=%q", firstHash, secondHash)
+	}
+	if firstHash != secondHash {
+		t.Fatalf("expected hash to ignore conversation object id: first=%s second=%s", firstHash, secondHash)
+	}
+	second.HTTP.Request.Path = "/api/v1/users/2"
+	if ConversationHash(second) == firstHash {
+		t.Fatalf("expected hash to change when request content changes")
 	}
 }
 
@@ -229,18 +286,19 @@ func TestQueuePublisherProducesConversationEnvelope(t *testing.T) {
 	defer cancel()
 
 	event := queue.HTTPConversationEvent{
-		SchemaVersion:  queue.EventHTTPConversationV1,
-		ConversationID: "6650f8cb1c5e7c6c1f93a111",
-		TenantID:       "tenant-1",
-		ProjectID:      "project-1",
-		AgentID:        "agent-1",
-		CaptureSource:  "ebpf",
-		CaptureMode:    "container",
-		CapturedAt:     time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC),
-		Method:         http.MethodPost,
-		Host:           "api.example.local",
-		Path:           "/users/login",
-		ResponseStatus: 200,
+		SchemaVersion:    queue.EventHTTPConversationV1,
+		ConversationID:   "6650f8cb1c5e7c6c1f93a111",
+		ConversationHash: "hash-1",
+		TenantID:         "tenant-1",
+		ProjectID:        "project-1",
+		AgentID:          "agent-1",
+		CaptureSource:    "ebpf",
+		CaptureMode:      "container",
+		CapturedAt:       time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC),
+		Method:           http.MethodPost,
+		Host:             "api.example.local",
+		Path:             "/users/login",
+		ResponseStatus:   200,
 	}
 
 	if err := publisher.PublishConversation(ctx, event); err != nil {
@@ -270,6 +328,9 @@ func TestQueuePublisherProducesConversationEnvelope(t *testing.T) {
 	}
 	if payload.ConversationID != event.ConversationID || payload.Path != event.Path {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.ConversationHash != event.ConversationHash {
+		t.Fatalf("unexpected payload hash: %+v", payload)
 	}
 	if strings.Contains(string(message.Value), "Authorization") || strings.Contains(string(message.Value), "password") {
 		t.Fatalf("queue message contains sensitive raw HTTP material: %s", string(message.Value))

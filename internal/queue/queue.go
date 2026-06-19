@@ -83,18 +83,19 @@ type AnalyzerJob struct {
 }
 
 type HTTPConversationEvent struct {
-	SchemaVersion  string    `json:"schema_version"`
-	ConversationID string    `json:"conversation_id"`
-	TenantID       string    `json:"tenant_id,omitempty"`
-	ProjectID      string    `json:"project_id,omitempty"`
-	AgentID        string    `json:"agent_id,omitempty"`
-	CaptureSource  string    `json:"capture_source,omitempty"`
-	CaptureMode    string    `json:"capture_mode,omitempty"`
-	CapturedAt     time.Time `json:"captured_at"`
-	Method         string    `json:"method"`
-	Host           string    `json:"host"`
-	Path           string    `json:"path"`
-	ResponseStatus int       `json:"response_status,omitempty"`
+	SchemaVersion    string    `json:"schema_version"`
+	ConversationID   string    `json:"conversation_id"`
+	ConversationHash string    `json:"conversation_hash,omitempty"`
+	TenantID         string    `json:"tenant_id,omitempty"`
+	ProjectID        string    `json:"project_id,omitempty"`
+	AgentID          string    `json:"agent_id,omitempty"`
+	CaptureSource    string    `json:"capture_source,omitempty"`
+	CaptureMode      string    `json:"capture_mode,omitempty"`
+	CapturedAt       time.Time `json:"captured_at"`
+	Method           string    `json:"method"`
+	Host             string    `json:"host"`
+	Path             string    `json:"path"`
+	ResponseStatus   int       `json:"response_status,omitempty"`
 }
 
 type DeadLetter struct {

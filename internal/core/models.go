@@ -7,6 +7,7 @@ import (
 )
 
 var ErrTrafficLogDropped = errors.New("traffic log dropped by retention policy")
+var ErrTrafficLogDuplicate = errors.New("traffic log duplicate")
 
 const (
 	InventorySchemaV2          = "api.inventory.v2"
@@ -22,51 +23,53 @@ const (
 )
 
 type TrafficLog struct {
-	ID             primitive.ObjectID  `bson:"_id,omitempty"`
-	SchemaVersion  string              `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
-	TenantID       string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
-	ProjectID      string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
-	CaptureSource  string              `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
-	CaptureMode    string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
-	AgentID        string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
-	ConversationID string              `bson:"conversation_id,omitempty" json:"conversation_id,omitempty"`
-	CreatedAt      time.Time           `bson:"created_at"`
-	Method         string              `bson:"method"`
-	URL            string              `bson:"url"`
-	Host           string              `bson:"host"`
-	Path           string              `bson:"path"`
-	ReqHeaders     map[string][]string `bson:"req_headers"`
-	ReqBody        string              `bson:"req_body"`
-	RespStatus     string              `bson:"resp_status"`
-	RespStatusCode int                 `bson:"resp_status_code,omitempty"`
-	RespHeaders    map[string][]string `bson:"resp_headers,omitempty"`
-	RespBody       string              `bson:"resp_body"`
-	Analyzed       bool                `bson:"analyzed"`
-	IsScanned      bool                `bson:"is_scanned"`
-	Tags           []string            `bson:"tags"`
+	ID               primitive.ObjectID  `bson:"_id,omitempty"`
+	SchemaVersion    string              `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
+	TenantID         string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID        string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	CaptureSource    string              `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
+	CaptureMode      string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
+	AgentID          string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	ConversationID   string              `bson:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ConversationHash string              `bson:"conversation_hash,omitempty" json:"conversation_hash,omitempty"`
+	CreatedAt        time.Time           `bson:"created_at"`
+	Method           string              `bson:"method"`
+	URL              string              `bson:"url"`
+	Host             string              `bson:"host"`
+	Path             string              `bson:"path"`
+	ReqHeaders       map[string][]string `bson:"req_headers"`
+	ReqBody          string              `bson:"req_body"`
+	RespStatus       string              `bson:"resp_status"`
+	RespStatusCode   int                 `bson:"resp_status_code,omitempty"`
+	RespHeaders      map[string][]string `bson:"resp_headers,omitempty"`
+	RespBody         string              `bson:"resp_body"`
+	Analyzed         bool                `bson:"analyzed"`
+	IsScanned        bool                `bson:"is_scanned"`
+	Tags             []string            `bson:"tags"`
 }
 
 type TrafficConversation struct {
-	ID             primitive.ObjectID  `bson:"_id,omitempty" json:"id,omitempty"`
-	ConversationID string              `bson:"conversation_id" json:"conversation_id"`
-	SchemaVersion  string              `bson:"schema_version" json:"schema_version"`
-	TenantID       string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
-	ProjectID      string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
-	AgentID        string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
-	CaptureSource  string              `bson:"capture_source" json:"capture_source"`
-	CaptureMode    string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
-	CapturedAt     time.Time           `bson:"captured_at" json:"captured_at"`
-	Method         string              `bson:"method" json:"method"`
-	URL            string              `bson:"url" json:"url"`
-	Host           string              `bson:"host" json:"host"`
-	Path           string              `bson:"path" json:"path"`
-	ReqHeaders     map[string][]string `bson:"req_headers,omitempty" json:"req_headers,omitempty"`
-	ReqBody        string              `bson:"req_body,omitempty" json:"req_body,omitempty"`
-	RespStatus     string              `bson:"resp_status" json:"resp_status"`
-	RespStatusCode int                 `bson:"resp_status_code,omitempty" json:"resp_status_code,omitempty"`
-	RespHeaders    map[string][]string `bson:"resp_headers,omitempty" json:"resp_headers,omitempty"`
-	RespBody       string              `bson:"resp_body,omitempty" json:"resp_body,omitempty"`
-	CreatedAt      time.Time           `bson:"created_at" json:"created_at"`
+	ID               primitive.ObjectID  `bson:"_id,omitempty" json:"id,omitempty"`
+	ConversationID   string              `bson:"conversation_id" json:"conversation_id"`
+	ConversationHash string              `bson:"conversation_hash,omitempty" json:"conversation_hash,omitempty"`
+	SchemaVersion    string              `bson:"schema_version" json:"schema_version"`
+	TenantID         string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID        string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	AgentID          string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	CaptureSource    string              `bson:"capture_source" json:"capture_source"`
+	CaptureMode      string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
+	CapturedAt       time.Time           `bson:"captured_at" json:"captured_at"`
+	Method           string              `bson:"method" json:"method"`
+	URL              string              `bson:"url" json:"url"`
+	Host             string              `bson:"host" json:"host"`
+	Path             string              `bson:"path" json:"path"`
+	ReqHeaders       map[string][]string `bson:"req_headers,omitempty" json:"req_headers,omitempty"`
+	ReqBody          string              `bson:"req_body,omitempty" json:"req_body,omitempty"`
+	RespStatus       string              `bson:"resp_status" json:"resp_status"`
+	RespStatusCode   int                 `bson:"resp_status_code,omitempty" json:"resp_status_code,omitempty"`
+	RespHeaders      map[string][]string `bson:"resp_headers,omitempty" json:"resp_headers,omitempty"`
+	RespBody         string              `bson:"resp_body,omitempty" json:"resp_body,omitempty"`
+	CreatedAt        time.Time           `bson:"created_at" json:"created_at"`
 }
 
 type IngestionLog struct {
@@ -88,6 +91,9 @@ type IngestDeadLetter struct {
 	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
 	Reason         string             `bson:"reason" json:"reason"`
 	SchemaVersion  string             `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
+	SourceTopic    string             `bson:"source_topic,omitempty" json:"source_topic,omitempty"`
+	EventID        string             `bson:"event_id,omitempty" json:"event_id,omitempty"`
+	Error          string             `bson:"error,omitempty" json:"error,omitempty"`
 	AgentID        string             `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
 	RemoteAddr     string             `bson:"remote_addr,omitempty" json:"remote_addr,omitempty"`
 	PayloadExcerpt string             `bson:"payload_excerpt,omitempty" json:"payload_excerpt,omitempty"`

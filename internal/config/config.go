@@ -19,9 +19,12 @@ const (
 )
 
 const (
-	ServiceAPIServer     = "api-server"
-	ServiceScannerWorker = "scanner-worker"
-	ServiceLegacyProxy   = "legacy-proxy"
+	ServiceAPIServer          = "api-server"
+	ServiceIngestor           = "ingestor"
+	ServiceScannerWorker      = "scanner-worker"
+	ServiceRuntimeAnalyzer    = "runtime-analyzer"
+	ServiceDeadLetterConsumer = "dead-letter-consumer"
+	ServiceLegacyProxy        = "legacy-proxy"
 )
 
 type Config struct {
@@ -54,8 +57,14 @@ func ValidateProductionEnvironment(service string) error {
 	switch service {
 	case ServiceAPIServer:
 		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64", "KARAXYS_REDIS_ADDR", "KARAXYS_OBJECTSTORE_BUCKET", "KARAXYS_QUEUE_BROKERS"}
+	case ServiceIngestor:
+		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_QUEUE_BROKERS"}
 	case ServiceScannerWorker:
 		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_SECRET_KEY_B64", "KARAXYS_REDIS_ADDR", "KARAXYS_QUEUE_BROKERS"}
+	case ServiceRuntimeAnalyzer:
+		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_QUEUE_BROKERS"}
+	case ServiceDeadLetterConsumer:
+		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_QUEUE_BROKERS"}
 	case ServiceLegacyProxy:
 		required = []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_API_KEY", "KARAXYS_AGENT_TOKEN", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64", "KARAXYS_REDIS_ADDR", "KARAXYS_OBJECTSTORE_BUCKET", "KARAXYS_QUEUE_BROKERS", "PROXY_ADDR", "PROXY_CERT_FILE", "PROXY_KEY_FILE"}
 	default:

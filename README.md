@@ -46,6 +46,12 @@ Start all local infrastructure, including Redpanda for Phase 4 queue work:
 make infra
 ```
 
+Start all Dockerized backend services after infrastructure is healthy:
+
+```sh
+make services
+```
+
 Start the API server only:
 
 ```sh
@@ -59,6 +65,26 @@ Start the API server with Phase 4 queue publishing enabled:
 make infra
 KARAXYS_API_KEY=dev-api-key \
 make api-queued
+```
+
+Alternatively, run only the ingestion endpoint as a standalone service:
+
+```sh
+make infra
+make ingestor
+```
+
+Start the runtime analyzer worker in a separate terminal:
+
+```sh
+make runtime-analyzer
+```
+
+Start the dead-letter consumer in another terminal when validating worker
+failure handling:
+
+```sh
+make dead-letter-consumer
 ```
 
 `KARAXYS_API_KEY` is a compatibility key for local automation. The normal
@@ -222,6 +248,23 @@ When `KARAXYS_QUEUE_ENABLED=true`, `POST /v1/ingest/conversations` persists the
 redacted log/conversation documents and publishes a reference event to
 `karaxys.http.conversations`. The event contains IDs and request metadata only;
 raw headers and bodies are not sent to the broker.
+
+`cmd/ingestor` exposes only `POST /v1/ingest/conversations` on
+`KARAXYS_INGESTOR_ADDR` and always publishes accepted conversations to
+`karaxys.http.conversations`.
+
+`cmd/runtime-analyzer` consumes `karaxys.http.conversations`, loads the persisted
+traffic log by `conversation_id`, runs the analyzer, and commits the queue
+message after processing. Malformed or unprocessable messages are published to
+`karaxys.ingest.dead_letter` before being committed.
+
+`cmd/dead-letter-consumer` consumes `karaxys.ingest.dead_letter` and stores
+redacted dead-letter entries in MongoDB's `ingest_dead_letters` collection for
+admin inspection and future replay tooling.
+
+Docker Compose also defines production-shaped local services for `api-server`,
+`ingestor`, `runtime-analyzer`, `dead-letter-consumer`, and `scanner-worker`.
+Use `make services` after `make infra` when validating process separation.
 
 ## Security Baseline
 

@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -91,6 +92,25 @@ func TestMemoryBrokerProducesAndConsumes(t *testing.T) {
 	}
 	if err := consumer.Commit(ctx, message); err != nil {
 		t.Fatalf("commit: %v", err)
+	}
+}
+
+func TestMemoryBrokerProduceRespectsBackpressureContext(t *testing.T) {
+	broker := NewMemoryBroker(1)
+	producer := broker.Producer()
+	ctx := context.Background()
+
+	if err := producer.Produce(ctx, Message{Topic: TopicAnalyzerJobs, Key: "job-1", Value: []byte(`{"ok":true}`)}); err != nil {
+		t.Fatalf("produce first message: %v", err)
+	}
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := producer.Produce(timeoutCtx, Message{Topic: TopicAnalyzerJobs, Key: "job-2", Value: []byte(`{"ok":true}`)})
+	if err == nil {
+		t.Fatalf("expected produce to fail when topic buffer is full and context expires")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
 	}
 }
 

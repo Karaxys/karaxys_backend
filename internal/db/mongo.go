@@ -148,6 +148,17 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetName("traffic_logs_agent_id_created_at"),
 		},
 		{
+			Keys:    bson.D{{Key: "conversation_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("traffic_logs_conversation_id_created_at"),
+		},
+		{
+			Keys: bson.D{{Key: "conversation_hash", Value: 1}},
+			Options: options.Index().
+				SetName("traffic_logs_conversation_hash_unique").
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"conversation_hash": bson.M{"$type": "string"}}),
+		},
+		{
 			Keys:    bson.D{{Key: "method", Value: 1}, {Key: "host", Value: 1}, {Key: "path", Value: 1}},
 			Options: options.Index().SetName("traffic_logs_method_host_path"),
 		},
@@ -171,6 +182,13 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "agent_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("traffic_conversations_agent_id_created_at"),
+		},
+		{
+			Keys: bson.D{{Key: "conversation_hash", Value: 1}},
+			Options: options.Index().
+				SetName("traffic_conversations_conversation_hash_unique").
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"conversation_hash": bson.M{"$type": "string"}}),
 		},
 		{
 			Keys:    bson.D{{Key: "method", Value: 1}, {Key: "host", Value: 1}, {Key: "path", Value: 1}},
@@ -201,6 +219,10 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "reason", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("ingest_dead_letters_reason_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "event_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("ingest_dead_letters_event_id_created_at"),
 		},
 	}); err != nil {
 		return err

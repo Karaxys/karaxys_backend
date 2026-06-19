@@ -3,6 +3,7 @@ package ingest
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -132,6 +133,16 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 	logEntry := ConversationToTrafficLog(conversation)
 	persistedLogEntry := redact.TrafficLog(logEntry)
 	if err := s.Store.SaveLog(persistedLogEntry); err != nil {
+		if errors.Is(err, core.ErrTrafficLogDuplicate) {
+			s.recordIngestionLog("duplicate", conversation, "duplicate conversation")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(Response{
+				Status:        "duplicate",
+				SchemaVersion: conversation.SchemaVersion,
+			})
+			return
+		}
 		if errors.Is(err, core.ErrTrafficLogDropped) {
 			s.recordIngestionLog("dropped", conversation, "traffic log dropped by retention or noise policy")
 			w.Header().Set("Content-Type", "application/json")
@@ -178,25 +189,26 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 
 func ConversationToTrafficLog(conversation contracts.HTTPConversation) core.TrafficLog {
 	return core.TrafficLog{
-		SchemaVersion:  conversation.SchemaVersion,
-		TenantID:       conversation.TenantID,
-		ProjectID:      conversation.ProjectID,
-		CaptureSource:  conversation.CaptureSource,
-		CaptureMode:    conversation.CaptureMode,
-		AgentID:        conversation.AgentID,
-		ConversationID: conversation.ID.OID,
-		CreatedAt:      conversation.CapturedAt.Date,
-		Method:         conversation.HTTP.Request.Method,
-		URL:            conversation.HTTP.Request.URL,
-		Host:           conversation.HTTP.Request.Host,
-		Path:           analyzerPath(conversation.HTTP.Request),
-		ReqHeaders:     conversation.HTTP.Request.Headers,
-		ReqBody:        conversation.HTTP.Request.Body,
-		RespStatus:     conversation.HTTP.Response.Status,
-		RespStatusCode: responseStatusCode(conversation.HTTP.Response.StatusCode),
-		RespHeaders:    conversation.HTTP.Response.Headers,
-		RespBody:       conversation.HTTP.Response.Body,
-		Tags:           []string{"capture_source:" + conversation.CaptureSource},
+		SchemaVersion:    conversation.SchemaVersion,
+		TenantID:         conversation.TenantID,
+		ProjectID:        conversation.ProjectID,
+		CaptureSource:    conversation.CaptureSource,
+		CaptureMode:      conversation.CaptureMode,
+		AgentID:          conversation.AgentID,
+		ConversationID:   conversation.ID.OID,
+		ConversationHash: ConversationHash(conversation),
+		CreatedAt:        conversation.CapturedAt.Date,
+		Method:           conversation.HTTP.Request.Method,
+		URL:              conversation.HTTP.Request.URL,
+		Host:             conversation.HTTP.Request.Host,
+		Path:             analyzerPath(conversation.HTTP.Request),
+		ReqHeaders:       conversation.HTTP.Request.Headers,
+		ReqBody:          conversation.HTTP.Request.Body,
+		RespStatus:       conversation.HTTP.Response.Status,
+		RespStatusCode:   responseStatusCode(conversation.HTTP.Response.StatusCode),
+		RespHeaders:      conversation.HTTP.Response.Headers,
+		RespBody:         conversation.HTTP.Response.Body,
+		Tags:             []string{"capture_source:" + conversation.CaptureSource},
 	}
 }
 
@@ -206,42 +218,80 @@ func ConversationToTrafficConversation(conversation contracts.HTTPConversation) 
 		respStatusCode = *conversation.HTTP.Response.StatusCode
 	}
 	return core.TrafficConversation{
-		ConversationID: conversation.ID.OID,
-		SchemaVersion:  conversation.SchemaVersion,
-		TenantID:       conversation.TenantID,
-		ProjectID:      conversation.ProjectID,
-		AgentID:        conversation.AgentID,
-		CaptureSource:  conversation.CaptureSource,
-		CaptureMode:    conversation.CaptureMode,
-		CapturedAt:     conversation.CapturedAt.Date,
-		Method:         conversation.HTTP.Request.Method,
-		URL:            conversation.HTTP.Request.URL,
-		Host:           conversation.HTTP.Request.Host,
-		Path:           analyzerPath(conversation.HTTP.Request),
-		ReqHeaders:     conversation.HTTP.Request.Headers,
-		ReqBody:        conversation.HTTP.Request.Body,
-		RespStatus:     conversation.HTTP.Response.Status,
-		RespStatusCode: respStatusCode,
-		RespHeaders:    conversation.HTTP.Response.Headers,
-		RespBody:       conversation.HTTP.Response.Body,
+		ConversationID:   conversation.ID.OID,
+		ConversationHash: ConversationHash(conversation),
+		SchemaVersion:    conversation.SchemaVersion,
+		TenantID:         conversation.TenantID,
+		ProjectID:        conversation.ProjectID,
+		AgentID:          conversation.AgentID,
+		CaptureSource:    conversation.CaptureSource,
+		CaptureMode:      conversation.CaptureMode,
+		CapturedAt:       conversation.CapturedAt.Date,
+		Method:           conversation.HTTP.Request.Method,
+		URL:              conversation.HTTP.Request.URL,
+		Host:             conversation.HTTP.Request.Host,
+		Path:             analyzerPath(conversation.HTTP.Request),
+		ReqHeaders:       conversation.HTTP.Request.Headers,
+		ReqBody:          conversation.HTTP.Request.Body,
+		RespStatus:       conversation.HTTP.Response.Status,
+		RespStatusCode:   respStatusCode,
+		RespHeaders:      conversation.HTTP.Response.Headers,
+		RespBody:         conversation.HTTP.Response.Body,
 	}
 }
 
 func ConversationToQueueEvent(conversation contracts.HTTPConversation) queue.HTTPConversationEvent {
 	return queue.HTTPConversationEvent{
-		SchemaVersion:  queue.EventHTTPConversationV1,
-		ConversationID: conversation.ID.OID,
-		TenantID:       conversation.TenantID,
-		ProjectID:      conversation.ProjectID,
-		AgentID:        conversation.AgentID,
-		CaptureSource:  conversation.CaptureSource,
-		CaptureMode:    conversation.CaptureMode,
-		CapturedAt:     conversation.CapturedAt.Date,
-		Method:         conversation.HTTP.Request.Method,
-		Host:           conversation.HTTP.Request.Host,
-		Path:           analyzerPath(conversation.HTTP.Request),
-		ResponseStatus: responseStatusCode(conversation.HTTP.Response.StatusCode),
+		SchemaVersion:    queue.EventHTTPConversationV1,
+		ConversationID:   conversation.ID.OID,
+		ConversationHash: ConversationHash(conversation),
+		TenantID:         conversation.TenantID,
+		ProjectID:        conversation.ProjectID,
+		AgentID:          conversation.AgentID,
+		CaptureSource:    conversation.CaptureSource,
+		CaptureMode:      conversation.CaptureMode,
+		CapturedAt:       conversation.CapturedAt.Date,
+		Method:           conversation.HTTP.Request.Method,
+		Host:             conversation.HTTP.Request.Host,
+		Path:             analyzerPath(conversation.HTTP.Request),
+		ResponseStatus:   responseStatusCode(conversation.HTTP.Response.StatusCode),
 	}
+}
+
+func ConversationHash(conversation contracts.HTTPConversation) string {
+	hashInput := struct {
+		SchemaVersion string                       `json:"schema_version"`
+		TenantID      string                       `json:"tenant_id,omitempty"`
+		ProjectID     string                       `json:"project_id,omitempty"`
+		AgentID       string                       `json:"agent_id,omitempty"`
+		CaptureSource string                       `json:"capture_source"`
+		CaptureMode   string                       `json:"capture_mode,omitempty"`
+		CapturedAt    contracts.DateField          `json:"captured_at"`
+		Connection    contracts.ConnectionMetadata `json:"connection,omitempty"`
+		Process       contracts.ProcessMetadata    `json:"process,omitempty"`
+		Container     contracts.ContainerMetadata  `json:"container,omitempty"`
+		Loss          contracts.LossMetadata       `json:"loss,omitempty"`
+		HTTP          contracts.HTTPExchange       `json:"http"`
+	}{
+		SchemaVersion: conversation.SchemaVersion,
+		TenantID:      conversation.TenantID,
+		ProjectID:     conversation.ProjectID,
+		AgentID:       conversation.AgentID,
+		CaptureSource: conversation.CaptureSource,
+		CaptureMode:   conversation.CaptureMode,
+		CapturedAt:    conversation.CapturedAt,
+		Connection:    conversation.Connection,
+		Process:       conversation.Process,
+		Container:     conversation.Container,
+		Loss:          conversation.Loss,
+		HTTP:          conversation.HTTP,
+	}
+	raw, err := json.Marshal(hashInput)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func responseStatusCode(statusCode *int) int {

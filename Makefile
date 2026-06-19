@@ -1,4 +1,4 @@
-.PHONY: mongo redis minio redpanda infra api api-queued scanner-worker legacy-proxy test
+.PHONY: mongo redis minio redpanda infra services api api-queued ingestor runtime-analyzer dead-letter-consumer scanner-worker legacy-proxy test
 
 MONGO_URI ?= mongodb://127.0.0.1:27017/?directConnection=true
 MONGO_DB_NAME ?= karaxys
@@ -25,11 +25,23 @@ redpanda:
 infra:
 	docker compose up -d mongo redis minio redpanda redpanda-init
 
+services:
+	docker compose up -d api-server ingestor runtime-analyzer dead-letter-consumer scanner-worker
+
 api:
 	go run ./cmd/api-server
 
 api-queued:
 	KARAXYS_QUEUE_ENABLED=true go run ./cmd/api-server
+
+ingestor:
+	go run ./cmd/ingestor
+
+runtime-analyzer:
+	go run ./cmd/runtime-analyzer
+
+dead-letter-consumer:
+	go run ./cmd/dead-letter-consumer
 
 scanner-worker:
 	go run ./cmd/scanner-worker

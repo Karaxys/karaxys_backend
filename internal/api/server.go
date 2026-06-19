@@ -17,8 +17,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -51,6 +53,14 @@ func NewServer(db *db.DB, dbName string, processors ...*analyzer.Processor) *Ser
 }
 
 func (s *Server) Start() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := s.StartWithContext(ctx, ":8081"); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth/signup", s.handleSignup)
 	mux.HandleFunc("POST /auth/login", s.handleLogin)
@@ -92,8 +102,47 @@ func (s *Server) Start() {
 	mw := NewMiddleware(50, 100, middlewareOptions)
 	handler := mw.SecureHeaders(mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mw.LimitWriteBody(mux)))))))
 
-	log.Println("Backend running on http://localhost:8081")
-	log.Fatal(http.ListenAndServe(":8081", handler))
+	if strings.TrimSpace(addr) == "" {
+		addr = ":8081"
+	}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	defer s.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("Backend running on http://localhost%s", addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return <-errCh
+	case err := <-errCh:
+		return err
+	}
+}
+
+func (s *Server) Close() {
+	if s == nil || s.queueProducer == nil {
+		return
+	}
+	if err := s.queueProducer.Close(); err != nil {
+		log.Printf("Conversation queue producer close error: %v", err)
+	}
+	s.queueProducer = nil
 }
 
 func (s *Server) middlewareOptionsFromEnv() MiddlewareOptions {

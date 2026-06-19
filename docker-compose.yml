@@ -92,6 +92,118 @@ services:
         rpk topic create karaxys.ingest.dead_letter --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
         rpk topic list -X brokers=redpanda:9092
 
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KARAXYS_CMD: api-server
+    container_name: karaxys-api-server
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    environment: &karaxys_app_env
+      KARAXYS_ENV: development
+      MONGO_URI: mongodb://mongo:27017/?directConnection=true
+      MONGO_DB_NAME: karaxys
+      KARAXYS_AGENT_TOKEN: docker-agent-token-with-at-least-24-chars
+      KARAXYS_API_KEY: docker-api-key-with-at-least-24-chars
+      KARAXYS_ALLOWED_ORIGINS: http://localhost:7000
+      KARAXYS_MAX_WRITE_BYTES: "1048576"
+      KARAXYS_REDIS_ADDR: redis:6379
+      KARAXYS_REDIS_DB: "0"
+      KARAXYS_REDIS_TLS: "false"
+      KARAXYS_REDIS_KEY_PREFIX: karaxys
+      KARAXYS_OBJECTSTORE_BUCKET: karaxys-local
+      KARAXYS_OBJECTSTORE_REGION: us-east-1
+      KARAXYS_OBJECTSTORE_ENDPOINT: http://minio:9000
+      KARAXYS_OBJECTSTORE_ACCESS_KEY_ID: karaxys
+      KARAXYS_OBJECTSTORE_SECRET_ACCESS_KEY: karaxys-local-minio-password
+      KARAXYS_OBJECTSTORE_FORCE_PATH_STYLE: "true"
+      KARAXYS_QUEUE_ENABLED: "true"
+      KARAXYS_QUEUE_BROKERS: redpanda:9092
+      KARAXYS_QUEUE_CLIENT_ID: karaxys-backend
+      KARAXYS_QUEUE_CONSUMER_GROUP: karaxys-runtime-analyzer
+      KARAXYS_RUNTIME_ANALYZER_CONSUMER_GROUP: karaxys-runtime-analyzer
+      KARAXYS_DEAD_LETTER_CONSUMER_GROUP: karaxys-dead-letter-consumer
+      KARAXYS_SECRET_KEY_B64: MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=
+      TRAFFIC_LOG_MAX_EVENTS: "1000"
+      TRAFFIC_LOG_TTL_HOURS: "24"
+    ports:
+      - "8081:8081"
+
+  ingestor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KARAXYS_CMD: ingestor
+    container_name: karaxys-ingestor
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    environment:
+      <<: *karaxys_app_env
+      KARAXYS_INGESTOR_ADDR: :8082
+    ports:
+      - "8082:8082"
+
+  runtime-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KARAXYS_CMD: runtime-analyzer
+    container_name: karaxys-runtime-analyzer
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    environment:
+      <<: *karaxys_app_env
+
+  dead-letter-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KARAXYS_CMD: dead-letter-consumer
+    container_name: karaxys-dead-letter-consumer
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    environment:
+      <<: *karaxys_app_env
+
+  scanner-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KARAXYS_CMD: scanner-worker
+    container_name: karaxys-scanner-worker
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *karaxys_app_env
+
 volumes:
   karaxys_mongo_data:
   karaxys_valkey_data:

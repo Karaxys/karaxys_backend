@@ -124,6 +124,27 @@ func TestValidateProductionEnvironmentAcceptsCompleteAPIEnvironment(t *testing.T
 	}
 }
 
+func TestValidateProductionEnvironmentAcceptsRuntimeAnalyzerEnvironment(t *testing.T) {
+	t.Setenv("KARAXYS_ENV", "production")
+	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
+	t.Setenv("MONGO_DB_NAME", "karaxys")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
+	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "")
+	t.Setenv("KARAXYS_SECRET_KEY_B64", "")
+	t.Setenv("KARAXYS_REDIS_ADDR", "")
+	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "")
+
+	if err := ValidateProductionEnvironment(ServiceRuntimeAnalyzer); err != nil {
+		t.Fatalf("unexpected production validation error: %v", err)
+	}
+	if err := ValidateProductionEnvironment(ServiceIngestor); err != nil {
+		t.Fatalf("unexpected ingestor validation error: %v", err)
+	}
+	if err := ValidateProductionEnvironment(ServiceDeadLetterConsumer); err != nil {
+		t.Fatalf("unexpected dead-letter consumer validation error: %v", err)
+	}
+}
+
 func TestValidateProductionEnvironmentAcceptsSessionOnlyAPIEnvironment(t *testing.T) {
 	t.Setenv("KARAXYS_ENV", "production")
 	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")

@@ -102,6 +102,7 @@ func ScanResult(result core.ScanResult) core.ScanResult {
 }
 
 func IngestDeadLetter(deadLetter core.IngestDeadLetter) core.IngestDeadLetter {
+	deadLetter.Error = Text(deadLetter.Error)
 	deadLetter.PayloadExcerpt = Text(deadLetter.PayloadExcerpt)
 	return deadLetter
 }

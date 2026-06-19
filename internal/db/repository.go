@@ -44,8 +44,30 @@ func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 	if logEntry.CreatedAt.IsZero() {
 		logEntry.CreatedAt = time.Now()
 	}
+	if strings.TrimSpace(logEntry.ConversationHash) != "" {
+		filter := bson.M{"conversation_hash": logEntry.ConversationHash}
+		update := bson.M{"$setOnInsert": logEntry}
+		result, err := db.Logs.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
+		if err != nil {
+			if mongo.IsDuplicateKeyError(err) {
+				return core.ErrTrafficLogDuplicate
+			}
+			log.Printf("Failed to save log entry: %v\n", err)
+			return err
+		}
+		if result.MatchedCount > 0 {
+			return core.ErrTrafficLogDuplicate
+		}
+		if err := db.PruneTrafficLogs(ctx); err != nil && !errors.Is(err, core.ErrTrafficLogDropped) {
+			log.Printf("Failed to prune traffic logs: %v\n", err)
+		}
+		return nil
+	}
 	_, err := db.Logs.InsertOne(ctx, logEntry)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return core.ErrTrafficLogDuplicate
+		}
 		log.Printf("Failed to save log entry: %v\n", err)
 		return err
 	}
@@ -67,6 +89,9 @@ func (db *DB) SaveConversation(conversation core.TrafficConversation) error {
 	}
 	_, err := db.TrafficConversations.InsertOne(ctx, conversation)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return core.ErrTrafficLogDuplicate
+		}
 		log.Printf("Failed to save traffic conversation: %v\n", err)
 	}
 	return err
@@ -103,6 +128,23 @@ func (db *DB) SaveIngestDeadLetter(deadLetter core.IngestDeadLetter) error {
 		log.Printf("Failed to save ingest dead letter: %v\n", err)
 	}
 	return err
+}
+
+func (db *DB) GetTrafficLogByConversationID(ctx context.Context, conversationID string) (core.TrafficLog, error) {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return core.TrafficLog{}, errors.New("conversation id is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	opts := options.FindOne().SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}})
+	var logEntry core.TrafficLog
+	err := db.Logs.FindOne(ctx, bson.M{"conversation_id": conversationID}, opts).Decode(&logEntry)
+	return logEntry, err
 }
 
 func (db *DB) SaveAuditLog(entry core.AuditLog) error {

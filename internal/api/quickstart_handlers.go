@@ -375,19 +375,7 @@ func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authenticateAgentToken(token string) (*ingest.AgentAuth, bool) {
-	if token == "" {
-		return nil, false
-	}
-	agent, err := s.DB.FindAgentByTokenHash(securetoken.Hash(token))
-	if err != nil {
-		return nil, false
-	}
-	_ = s.DB.MarkAgentSeen(agent.ID)
-	return &ingest.AgentAuth{
-		AgentID:      agent.ID.Hex(),
-		TenantID:     agent.AccountID.Hex(),
-		DataSourceID: agent.DataSourceID.Hex(),
-	}, true
+	return ingest.MongoAgentAuthenticator(s.DB)(token)
 }
 
 func validateDataSourceType(value string) (string, error) {
