@@ -90,12 +90,14 @@ func TestValidateProductionEnvironmentRejectsMissingValues(t *testing.T) {
 	t.Setenv("KARAXYS_AGENT_TOKEN", "")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", "")
+	t.Setenv("KARAXYS_REDIS_ADDR", "")
+	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "")
 
 	err := ValidateProductionEnvironment(ServiceAPIServer)
 	if err == nil {
 		t.Fatalf("expected production validation error")
 	}
-	for _, expected := range []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64"} {
+	for _, expected := range []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64", "KARAXYS_REDIS_ADDR", "KARAXYS_OBJECTSTORE_BUCKET"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("expected error to mention %s, got %v", expected, err)
 		}
@@ -112,6 +114,8 @@ func TestValidateProductionEnvironmentAcceptsCompleteAPIEnvironment(t *testing.T
 	t.Setenv("KARAXYS_AGENT_TOKEN", "agent-token-with-at-least-24-chars")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
+	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
 
 	if err := ValidateProductionEnvironment(ServiceAPIServer); err != nil {
 		t.Fatalf("unexpected production validation error: %v", err)
@@ -126,6 +130,8 @@ func TestValidateProductionEnvironmentAcceptsSessionOnlyAPIEnvironment(t *testin
 	t.Setenv("KARAXYS_AGENT_TOKEN", "")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
+	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
 
 	if err := ValidateProductionEnvironment(ServiceAPIServer); err != nil {
 		t.Fatalf("unexpected production validation error: %v", err)
@@ -141,6 +147,8 @@ func TestValidateProductionEnvironmentRejectsLocalhostOriginAndInvalidSecretKey(
 	t.Setenv("KARAXYS_AGENT_TOKEN", "agent-token-with-at-least-24-chars")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "http://localhost:7000")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", "not-valid-base64")
+	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
+	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
 
 	err := ValidateProductionEnvironment(ServiceAPIServer)
 	if err == nil {
@@ -159,6 +167,8 @@ func TestValidateProductionEnvironmentRejectsUnscopedAPIKey(t *testing.T) {
 	t.Setenv("KARAXYS_API_KEY_ACCOUNT_ID", "")
 	t.Setenv("KARAXYS_ALLOWED_ORIGINS", "https://karaxys.example.com")
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
+	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
 
 	err := ValidateProductionEnvironment(ServiceAPIServer)
 	if err == nil {

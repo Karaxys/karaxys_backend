@@ -1,12 +1,17 @@
 package analyzer
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"karaxys_backend/internal/analyzer/endpoint"
+	lifecyclerules "karaxys_backend/internal/analyzer/rules"
+	"karaxys_backend/internal/contracts"
 	"karaxys_backend/internal/core"
+	"karaxys_backend/internal/ingest"
 	"karaxys_backend/internal/security/redact"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -286,5 +291,77 @@ func TestTrafficMetricEventKeyIsBucketScoped(t *testing.T) {
 	}
 	if other := trafficMetricEventKey("conversation:1", "fingerprint", core.TrafficMetricGranularityDay, hour); other == key {
 		t.Fatalf("event key should include bucket granularity")
+	}
+}
+
+func TestDeprecatedEndpointRulesAffectRiskReasonsAndTags(t *testing.T) {
+	ruleSet, err := lifecyclerules.CompileEndpointRuleSetBytes([]byte(`{
+		"deprecated": [
+			{
+				"name": "v1-retired",
+				"path_regex": "^/api/v1/",
+				"reason": "deprecated_version:v1",
+				"tags": ["lifecycle:deprecated", "version:v1"],
+				"risk_level": "HIGH"
+			}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("compile rules: %v", err)
+	}
+
+	findings := endpointRuleFindings(ruleSet, "/api/v1/users/123", "/api/v1/users/{user_id}")
+	reasons := reasonsFromRuleFindings(findings)
+	tags := tagsFromRuleFindings(findings)
+
+	if len(findings) != 1 || reasons[0] != "deprecated_version:v1" || maxRiskLevel("LOW", riskLevelFromRuleFindings(findings)) != "HIGH" {
+		t.Fatalf("unexpected rule findings=%#v reasons=%#v", findings, reasons)
+	}
+	seenTags := map[string]bool{}
+	for _, tag := range tags {
+		seenTags[tag] = true
+	}
+	for _, expected := range []string{"lifecycle:deprecated", "version:v1"} {
+		if !seenTags[expected] {
+			t.Fatalf("missing tag %s in %#v", expected, tags)
+		}
+	}
+}
+
+func TestAnalyzerRecordedHTTPConversationFixtureProducesSecuritySignals(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "examples", "http.conversation.v1.example.json"))
+	if err != nil {
+		t.Fatalf("read recorded fixture: %v", err)
+	}
+	conversation, err := contracts.DecodeAndValidateHTTPConversation(raw)
+	if err != nil {
+		t.Fatalf("decode recorded fixture: %v", err)
+	}
+
+	logEntry := ingest.ConversationToTrafficLog(conversation)
+	normalized := endpoint.NormalizePath(logEntry.Path, logEntry.URL)
+	if normalized.Pattern != "/api/v1/users" {
+		t.Fatalf("unexpected normalized path: %s", normalized.Pattern)
+	}
+	if logEntry.ConversationID != conversation.ID.OID {
+		t.Fatalf("conversation id not mapped into analyzer log: %s", logEntry.ConversationID)
+	}
+
+	observations := detectSensitiveObservations(logEntry)
+	if tags := tagsFromSensitiveObservations(observations); len(tags) != 1 || tags[0] != "EMAIL" {
+		t.Fatalf("expected response email sensitivity from recorded fixture, got observations=%#v tags=%#v", observations, tags)
+	}
+
+	ruleSet, err := lifecyclerules.CompileEndpointRuleSetBytes([]byte(`{
+		"deprecated": [
+			{"name":"fixture-v1","path_regex":"^/api/v1/","reason":"deprecated_version:v1","tags":["lifecycle:deprecated"],"risk_level":"MEDIUM"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("compile fixture rules: %v", err)
+	}
+	findings := endpointRuleFindings(ruleSet, logEntry.Path, normalized.Pattern)
+	if len(findings) != 1 || findings[0].Reason != "deprecated_version:v1" {
+		t.Fatalf("expected fixture lifecycle finding, got %#v", findings)
 	}
 }

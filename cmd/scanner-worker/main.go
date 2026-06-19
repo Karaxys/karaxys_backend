@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"karaxys_backend/internal/config"
+	"karaxys_backend/internal/coordination"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/scanner"
@@ -39,6 +41,17 @@ func main() {
 	defer database.Disconnect()
 
 	engine := scanner.NewScanner()
+	redisRuntime, err := coordination.NewRedisRuntimeFromEnv()
+	if err != nil {
+		if config.IsProduction() {
+			log.Fatalf("Redis/Valkey scan coordination is required in production: %v", err)
+		}
+		log.Printf("Redis/Valkey scan coordination disabled: %v", err)
+	}
+	if redisRuntime != nil {
+		defer redisRuntime.Close()
+		log.Printf("Redis/Valkey scanner coordination enabled prefix=%s", redisRuntime.KeyPrefix)
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(stop)
@@ -52,7 +65,7 @@ func main() {
 		default:
 		}
 
-		processed, err := processOne(database, engine, *workerID)
+		processed, err := processOne(database, engine, *workerID, redisRuntime)
 		if err != nil {
 			log.Printf("Scanner worker error: %v", err)
 		}
@@ -65,7 +78,7 @@ func main() {
 	}
 }
 
-func processOne(database *db.DB, engine *scanner.Scanner, workerID string) (bool, error) {
+func processOne(database *db.DB, engine *scanner.Scanner, workerID string, redisRuntime *coordination.RedisRuntime) (bool, error) {
 	job, err := database.ClaimNextScanJob(workerID)
 	if err != nil || job == nil {
 		return false, err
@@ -73,16 +86,41 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string) (bool
 
 	log.Printf("Claimed scan job id=%s test=%s inventory=%s", job.ID.Hex(), job.TestType, job.InventoryID.Hex())
 	defer cleanupScanSecret(database, job.Config.AuthSecretRef)
+	var lock coordination.DistributedLock
+	if redisRuntime != nil && redisRuntime.Locker != nil {
+		lockValue := workerID + ":" + primitive.NewObjectID().Hex()
+		acquiredLock, acquired, lockErr := redisRuntime.Locker.TryLock(context.Background(), coordination.ScanJobLockKey(job.ID.Hex()), lockValue, redisRuntime.ScanLockTTL)
+		if lockErr != nil {
+			_ = database.FailScanJob(job.ID, "scan coordination lock failed: "+lockErr.Error())
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, "scan coordination lock failed", 0)
+			return true, lockErr
+		}
+		if !acquired {
+			message := "scan coordination lock already held"
+			_ = database.FailScanJob(job.ID, message)
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, message, 0)
+			return true, nil
+		}
+		lock = acquiredLock
+		defer func() {
+			if err := lock.Release(context.Background()); err != nil {
+				log.Printf("Failed to release scan lock job=%s: %v", job.ID.Hex(), err)
+			}
+		}()
+	}
+	setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusRunning, workerID, "", 0)
 
 	config := job.Config
 	if err := hydrateScanAuthSecret(database, &config); err != nil {
 		_ = database.FailScanJob(job.ID, err.Error())
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), 0)
 		return true, err
 	}
 
 	results, err := engine.ExecuteScan(config)
 	if err != nil {
 		_ = database.FailScanJob(job.ID, err.Error())
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), 0)
 		return true, err
 	}
 
@@ -103,15 +141,34 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string) (bool
 			CreatedAt:      time.Now().UTC(),
 		}); err != nil {
 			_ = database.FailScanJob(job.ID, err.Error())
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), len(results))
 			return true, err
 		}
 	}
 
 	if err := database.CompleteScanJob(job.ID, len(results)); err != nil {
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), len(results))
 		return true, err
 	}
+	setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusCompleted, workerID, "", len(results))
 	log.Printf("Completed scan job id=%s results=%d", job.ID.Hex(), len(results))
 	return true, nil
+}
+
+func setScanProgress(redisRuntime *coordination.RedisRuntime, jobID string, status string, workerID string, message string, resultsCount int) {
+	if redisRuntime == nil || redisRuntime.Progress == nil {
+		return
+	}
+	if err := redisRuntime.Progress.Set(context.Background(), coordination.ScanProgress{
+		JobID:        jobID,
+		Status:       status,
+		WorkerID:     workerID,
+		Message:      message,
+		ResultsCount: resultsCount,
+		UpdatedAt:    time.Now().UTC(),
+	}, redisRuntime.ProgressTTL); err != nil {
+		log.Printf("Failed to update scan progress job=%s status=%s: %v", jobID, status, err)
+	}
 }
 
 func hydrateScanAuthSecret(database *db.DB, config *core.ScanConfig) error {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"karaxys_backend/internal/analyzer"
+	"karaxys_backend/internal/config"
+	"karaxys_backend/internal/coordination"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/ingest"
@@ -70,7 +72,20 @@ func (s *Server) Start() {
 	if s.Ingest != nil {
 		s.Ingest.AgentAuthenticator = s.authenticateAgentToken
 	}
-	mw := NewMiddleware(50, 100, s.middlewareOptionsFromEnv())
+	middlewareOptions := s.middlewareOptionsFromEnv()
+	redisRuntime, err := coordination.NewRedisRuntimeFromEnv()
+	if err != nil {
+		if config.IsProduction() {
+			log.Fatalf("Redis/Valkey coordination is required in production: %v", err)
+		}
+		log.Printf("Redis/Valkey coordination disabled: %v", err)
+	}
+	if redisRuntime != nil {
+		defer redisRuntime.Close()
+		middlewareOptions.RateLimiter = redisRuntime.RateLimiter
+		log.Printf("Redis/Valkey distributed rate limiter enabled prefix=%s", redisRuntime.KeyPrefix)
+	}
+	mw := NewMiddleware(50, 100, middlewareOptions)
 	handler := mw.SecureHeaders(mw.CORS(mw.Recoverer(mw.Logger(mw.RateLimit(mw.Authenticate(mw.LimitWriteBody(mux)))))))
 
 	log.Println("Backend running on http://localhost:8081")

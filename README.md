@@ -1,19 +1,26 @@
 # Karaxys Backend
 
-## Local MongoDB
+## Local Infrastructure
 
 Karaxys can still connect to MongoDB Atlas by setting `MONGO_URI`, but local
-development should use Docker MongoDB:
+development should use Docker MongoDB and Valkey:
 
 ```sh
 cp .env.example .env
-docker compose up -d mongo
+make mongo
 ```
+
+`make mongo` starts MongoDB plus Valkey because `.env.example` enables
+Redis/Valkey-backed coordination. Use `make minio` only when testing
+S3-compatible backup/archive writers locally, or `make infra` to start MongoDB,
+Valkey, and MinIO together.
 
 Default local values:
 
 - `MONGO_URI=mongodb://127.0.0.1:27017/?directConnection=true`
 - `MONGO_DB_NAME=karaxys`
+- `KARAXYS_REDIS_ADDR=127.0.0.1:6379`
+- `KARAXYS_OBJECTSTORE_ENDPOINT=http://127.0.0.1:9000`
 - `TRAFFIC_LOG_MAX_EVENTS=1000`
 - `TRAFFIC_LOG_TTL_HOURS=24`
 
@@ -25,7 +32,7 @@ are kept.
 
 The eBPF ingestion path no longer needs the legacy forward proxy process.
 
-Start MongoDB:
+Start MongoDB and Valkey:
 
 ```sh
 make mongo
@@ -147,6 +154,40 @@ without scanning short-retention raw logs. `traffic_metric_events` is a
 short-retention dedupe ledger keyed by captured conversation and bucket, so a
 replayed eBPF conversation does not double-increment hourly or daily metrics.
 
+Endpoint lifecycle detection is configurable through either
+`KARAXYS_ENDPOINT_RULES_JSON` or `KARAXYS_ENDPOINT_RULES_FILE`. Rules currently
+support deprecated endpoint detection by regex against the original path and
+normalized path pattern:
+
+```json
+{
+  "deprecated": [
+    {
+      "name": "v1-retired",
+      "path_regex": "^/api/v1/",
+      "reason": "deprecated_version:v1",
+      "tags": ["lifecycle:deprecated", "version:v1"],
+      "risk_level": "HIGH"
+    }
+  ]
+}
+```
+
+Redis/Valkey-backed coordination is available for distributed HTTP rate limits,
+scanner job locks, and short-lived scan progress cache. If
+`KARAXYS_REDIS_ADDR` is unset, local development falls back to the in-process
+limiter and Mongo scan-job claim path.
+
+S3-compatible object storage is abstracted through backend writers for MongoDB
+dump artifacts and long-retention redacted conversation archives. Use AWS S3 in
+production and MinIO for local or self-hosted validation.
+
+Analytics and search now have repository interfaces. MongoDB remains the
+current implementation for `traffic_metrics` and inventory search. Add
+ClickHouse only when MongoDB aggregate reads become too expensive, and add
+OpenSearch only when full-text investigation becomes a required product
+workflow.
+
 ## Security Baseline
 
 Karaxys redacts common secrets before persistence in the current backend data
@@ -225,7 +266,7 @@ Prerequisites:
   `sudo`.
 - `jq` installed for the verification commands.
 
-Terminal 1: start MongoDB and the API server.
+Terminal 1: start MongoDB, Valkey, and the API server.
 
 ```sh
 cd /home/shion/Documents/Karaxys/karaxys_backend

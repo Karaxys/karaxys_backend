@@ -1,4 +1,4 @@
-.PHONY: mongo api scanner-worker legacy-proxy test
+.PHONY: mongo redis minio infra api scanner-worker legacy-proxy test
 
 MONGO_URI ?= mongodb://127.0.0.1:27017/?directConnection=true
 MONGO_DB_NAME ?= karaxys
@@ -11,7 +11,16 @@ export TRAFFIC_LOG_MAX_EVENTS
 export TRAFFIC_LOG_TTL_HOURS
 
 mongo:
-	docker compose up -d mongo
+	docker compose up -d mongo redis
+
+redis:
+	docker compose up -d redis
+
+minio:
+	docker compose up -d minio
+
+infra:
+	docker compose up -d mongo redis minio
 
 api:
 	go run ./cmd/api-server

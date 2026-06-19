@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"karaxys_backend/internal/analyzer/endpoint"
 	"karaxys_backend/internal/analyzer/pii"
+	lifecyclerules "karaxys_backend/internal/analyzer/rules"
 	"karaxys_backend/internal/analyzer/schema"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/security/redact"
@@ -34,11 +35,13 @@ type Processor struct {
 	SensitiveSamplesColl *mongo.Collection
 	TrafficMetricsColl   *mongo.Collection
 	MetricEventsColl     *mongo.Collection
+	EndpointRules        *lifecyclerules.CompiledEndpointRuleSet
 	EndpointSampleLimit  int
 }
 
 type ProcessorOptions struct {
 	EndpointSampleLimit int
+	EndpointRules       *lifecyclerules.CompiledEndpointRuleSet
 }
 
 type sensitiveObservation struct {
@@ -56,6 +59,15 @@ func NewProcessor(db *mongo.Database, options ...ProcessorOptions) *Processor {
 	if opts.EndpointSampleLimit <= 0 {
 		opts.EndpointSampleLimit = defaultEndpointSampleLimit
 	}
+	ruleSet := opts.EndpointRules
+	if ruleSet == nil {
+		var err error
+		ruleSet, err = lifecyclerules.LoadEndpointRuleSetFromEnv()
+		if err != nil {
+			log.Printf("Endpoint rules load error: %v; using built-in defaults", err)
+			ruleSet, _ = lifecyclerules.CompileEndpointRuleSet(lifecyclerules.DefaultEndpointRuleSet())
+		}
+	}
 	return &Processor{
 		InventoryColl:        db.Collection("api_inventory"),
 		ParametersColl:       db.Collection("api_parameters"),
@@ -63,6 +75,7 @@ func NewProcessor(db *mongo.Database, options ...ProcessorOptions) *Processor {
 		SensitiveSamplesColl: db.Collection("sensitive_samples"),
 		TrafficMetricsColl:   db.Collection("traffic_metrics"),
 		MetricEventsColl:     db.Collection("traffic_metric_events"),
+		EndpointRules:        ruleSet,
 		EndpointSampleLimit:  opts.EndpointSampleLimit,
 	}
 }
@@ -349,12 +362,13 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 
 	finalPII := uniqueStrings(detectedPII)
 
-	calculatedRisk := calculateRiskLevel(finalPII)
+	ruleFindings := endpointRuleFindings(e.EndpointRules, logEntry.Path, pathPattern)
+	calculatedRisk := maxRiskLevel(calculateRiskLevel(finalPII), riskLevelFromRuleFindings(ruleFindings))
 	finalResponsePII := uniqueStrings(responsePII)
 	authObserved := authObserved(logEntry.ReqHeaders)
 	statusCode := responseStatusCode(logEntry)
-	riskReasons := calculateRiskReasons(finalPII, finalResponsePII, authObserved, statusCode, logEntry.Path)
-	tags := endpointTags(logEntry, authObserved, finalPII, finalResponsePII)
+	riskReasons := uniqueStrings(append(calculateRiskReasons(finalPII, finalResponsePII, authObserved, statusCode, logEntry.Path), reasonsFromRuleFindings(ruleFindings)...))
+	tags := uniqueStrings(append(endpointTags(logEntry, authObserved, finalPII, finalResponsePII), tagsFromRuleFindings(ruleFindings)...))
 	now := time.Now().UTC()
 
 	filter := bson.M{
@@ -1002,6 +1016,64 @@ func endpointTags(logEntry core.TrafficLog, auth bool, piiTags []string, respons
 		}
 	}
 	return uniqueStrings(tags)
+}
+
+func endpointRuleFindings(ruleSet *lifecyclerules.CompiledEndpointRuleSet, path string, pathPattern string) []lifecyclerules.Finding {
+	if ruleSet == nil {
+		return nil
+	}
+	return ruleSet.Evaluate(path, pathPattern)
+}
+
+func reasonsFromRuleFindings(findings []lifecyclerules.Finding) []string {
+	var reasons []string
+	for _, finding := range findings {
+		if strings.TrimSpace(finding.Reason) != "" {
+			reasons = append(reasons, finding.Reason)
+		}
+	}
+	return uniqueStrings(reasons)
+}
+
+func tagsFromRuleFindings(findings []lifecyclerules.Finding) []string {
+	var tags []string
+	for _, finding := range findings {
+		tags = append(tags, finding.Tags...)
+	}
+	return uniqueStrings(tags)
+}
+
+func riskLevelFromRuleFindings(findings []lifecyclerules.Finding) string {
+	riskLevel := ""
+	for _, finding := range findings {
+		riskLevel = maxRiskLevel(riskLevel, finding.RiskLevel)
+	}
+	return riskLevel
+}
+
+func maxRiskLevel(left string, right string) string {
+	if riskRank(right) > riskRank(left) {
+		return strings.ToUpper(strings.TrimSpace(right))
+	}
+	if normalized := strings.ToUpper(strings.TrimSpace(left)); riskRank(normalized) > 0 {
+		return normalized
+	}
+	return "LOW"
+}
+
+func riskRank(value string) int {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "LOW":
+		return 1
+	case "MEDIUM":
+		return 2
+	case "HIGH":
+		return 3
+	case "CRITICAL":
+		return 4
+	default:
+		return 0
+	}
 }
 
 func sensitiveTagsFor(scope string, key string, value string) []string {

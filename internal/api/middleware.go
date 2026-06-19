@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"karaxys_backend/internal/coordination"
+
 	"golang.org/x/time/rate"
 )
 
@@ -42,6 +44,8 @@ type Middleware struct {
 	apiKeyAccountID   string
 	apiKeyRole        string
 	sessionAuth       SessionAuthenticator
+	rateLimiter       coordination.RateLimiter
+	rateLimitWindow   time.Duration
 	allowedOrigins    map[string]struct{}
 	maxWriteBodyBytes int64
 }
@@ -56,6 +60,8 @@ type MiddlewareOptions struct {
 	APIKeyAccountID   string
 	APIKeyRole        string
 	SessionAuth       SessionAuthenticator
+	RateLimiter       coordination.RateLimiter
+	RateLimitWindow   time.Duration
 	AllowedOrigins    []string
 	MaxWriteBodyBytes int64
 }
@@ -64,6 +70,7 @@ func NewMiddleware(rps float64, burst int, options ...MiddlewareOptions) *Middle
 	opts := MiddlewareOptions{
 		AllowedOrigins:    []string{"http://localhost:7000"},
 		MaxWriteBodyBytes: DefaultMaxWriteBodyBytes,
+		RateLimitWindow:   time.Second,
 	}
 	if len(options) > 0 {
 		opts = options[0]
@@ -72,6 +79,9 @@ func NewMiddleware(rps float64, burst int, options ...MiddlewareOptions) *Middle
 		}
 		if opts.MaxWriteBodyBytes <= 0 {
 			opts.MaxWriteBodyBytes = DefaultMaxWriteBodyBytes
+		}
+		if opts.RateLimitWindow <= 0 {
+			opts.RateLimitWindow = time.Second
 		}
 	}
 
@@ -84,6 +94,8 @@ func NewMiddleware(rps float64, burst int, options ...MiddlewareOptions) *Middle
 		apiKeyAccountID:   strings.TrimSpace(opts.APIKeyAccountID),
 		apiKeyRole:        normalizeAPIKeyRole(opts.APIKeyRole),
 		sessionAuth:       opts.SessionAuth,
+		rateLimiter:       opts.RateLimiter,
+		rateLimitWindow:   opts.RateLimitWindow,
 		allowedOrigins:    originSet(opts.AllowedOrigins),
 		maxWriteBodyBytes: opts.MaxWriteBodyBytes,
 	}
@@ -154,7 +166,19 @@ func (m *Middleware) RateLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		limiter := m.getLimiter(m.rateLimitKey(r))
+		key := m.rateLimitKey(r)
+		if m.rateLimiter != nil {
+			allowed, err := m.rateLimiter.Allow(r.Context(), key, m.burst, m.rateLimitWindow)
+			if err != nil {
+				log.Printf("distributed rate limiter error key=%s: %v", key, err)
+			} else if !allowed {
+				http.Error(w, "Too Many Requests - Slow Down", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		limiter := m.getLimiter(key)
 		if !limiter.Allow() {
 			http.Error(w, "Too Many Requests - Slow Down", http.StatusTooManyRequests)
 			return

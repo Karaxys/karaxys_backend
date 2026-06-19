@@ -14,5 +14,43 @@ services:
       retries: 6
       start_period: 20s
 
+  redis:
+    image: valkey/valkey:8-alpine
+    container_name: karaxys-valkey
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - karaxys_valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  minio:
+    image: minio/minio:latest
+    container_name: karaxys-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: karaxys
+      MINIO_ROOT_PASSWORD: karaxys-local-minio-password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - karaxys_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
 volumes:
   karaxys_mongo_data:
+  karaxys_valkey_data:
+  karaxys_minio_data:
