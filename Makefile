@@ -1,4 +1,4 @@
-.PHONY: mongo redis minio infra api scanner-worker legacy-proxy test
+.PHONY: mongo redis minio redpanda infra api scanner-worker legacy-proxy test
 
 MONGO_URI ?= mongodb://127.0.0.1:27017/?directConnection=true
 MONGO_DB_NAME ?= karaxys
@@ -19,8 +19,11 @@ redis:
 minio:
 	docker compose up -d minio
 
+redpanda:
+	docker compose up -d redpanda redpanda-init
+
 infra:
-	docker compose up -d mongo redis minio
+	docker compose up -d mongo redis minio redpanda redpanda-init
 
 api:
 	go run ./cmd/api-server

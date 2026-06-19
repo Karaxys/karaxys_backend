@@ -50,7 +50,50 @@ services:
       retries: 6
       start_period: 10s
 
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: karaxys-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+    volumes:
+      - karaxys_redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info -X brokers=localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redpanda-init:
+    image: redpandadata/redpanda:latest
+    container_name: karaxys-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        rpk topic create karaxys.http.conversations --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
+        rpk topic create karaxys.analyzer.jobs --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
+        rpk topic create karaxys.ingest.dead_letter --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
+        rpk topic list -X brokers=redpanda:9092
+
 volumes:
   karaxys_mongo_data:
   karaxys_valkey_data:
   karaxys_minio_data:
+  karaxys_redpanda_data:

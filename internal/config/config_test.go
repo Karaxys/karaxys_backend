@@ -92,12 +92,13 @@ func TestValidateProductionEnvironmentRejectsMissingValues(t *testing.T) {
 	t.Setenv("KARAXYS_SECRET_KEY_B64", "")
 	t.Setenv("KARAXYS_REDIS_ADDR", "")
 	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "")
 
 	err := ValidateProductionEnvironment(ServiceAPIServer)
 	if err == nil {
 		t.Fatalf("expected production validation error")
 	}
-	for _, expected := range []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64", "KARAXYS_REDIS_ADDR", "KARAXYS_OBJECTSTORE_BUCKET"} {
+	for _, expected := range []string{"MONGO_URI", "MONGO_DB_NAME", "KARAXYS_ALLOWED_ORIGINS", "KARAXYS_SECRET_KEY_B64", "KARAXYS_REDIS_ADDR", "KARAXYS_OBJECTSTORE_BUCKET", "KARAXYS_QUEUE_BROKERS"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("expected error to mention %s, got %v", expected, err)
 		}
@@ -116,6 +117,7 @@ func TestValidateProductionEnvironmentAcceptsCompleteAPIEnvironment(t *testing.T
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
 	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
 	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
 
 	if err := ValidateProductionEnvironment(ServiceAPIServer); err != nil {
 		t.Fatalf("unexpected production validation error: %v", err)
@@ -132,6 +134,7 @@ func TestValidateProductionEnvironmentAcceptsSessionOnlyAPIEnvironment(t *testin
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
 	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
 	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
 
 	if err := ValidateProductionEnvironment(ServiceAPIServer); err != nil {
 		t.Fatalf("unexpected production validation error: %v", err)
@@ -149,6 +152,7 @@ func TestValidateProductionEnvironmentRejectsLocalhostOriginAndInvalidSecretKey(
 	t.Setenv("KARAXYS_SECRET_KEY_B64", "not-valid-base64")
 	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
 	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
 
 	err := ValidateProductionEnvironment(ServiceAPIServer)
 	if err == nil {
@@ -169,6 +173,7 @@ func TestValidateProductionEnvironmentRejectsUnscopedAPIKey(t *testing.T) {
 	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
 	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
 	t.Setenv("KARAXYS_OBJECTSTORE_BUCKET", "karaxys-prod")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
 
 	err := ValidateProductionEnvironment(ServiceAPIServer)
 	if err == nil {

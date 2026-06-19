@@ -3,17 +3,17 @@
 ## Local Infrastructure
 
 Karaxys can still connect to MongoDB Atlas by setting `MONGO_URI`, but local
-development should use Docker MongoDB and Valkey:
+development should use Docker MongoDB, Valkey, and Redpanda:
 
 ```sh
 cp .env.example .env
 make mongo
 ```
 
-`make mongo` starts MongoDB plus Valkey because `.env.example` enables
-Redis/Valkey-backed coordination. Use `make minio` only when testing
+`make mongo` starts MongoDB plus Valkey for the current local backend path. Use
+`make redpanda` when testing Phase 4 queues, `make minio` when testing
 S3-compatible backup/archive writers locally, or `make infra` to start MongoDB,
-Valkey, and MinIO together.
+Valkey, MinIO, and Redpanda together.
 
 Default local values:
 
@@ -21,6 +21,7 @@ Default local values:
 - `MONGO_DB_NAME=karaxys`
 - `KARAXYS_REDIS_ADDR=127.0.0.1:6379`
 - `KARAXYS_OBJECTSTORE_ENDPOINT=http://127.0.0.1:9000`
+- `KARAXYS_QUEUE_BROKERS=127.0.0.1:19092`
 - `TRAFFIC_LOG_MAX_EVENTS=1000`
 - `TRAFFIC_LOG_TTL_HOURS=24`
 
@@ -32,10 +33,16 @@ are kept.
 
 The eBPF ingestion path no longer needs the legacy forward proxy process.
 
-Start MongoDB and Valkey:
+Start MongoDB and Valkey for the current API/scanner workflow:
 
 ```sh
 make mongo
+```
+
+Start all local infrastructure, including Redpanda for Phase 4 queue work:
+
+```sh
+make infra
 ```
 
 Start the API server only:
@@ -187,6 +194,20 @@ current implementation for `traffic_metrics` and inventory search. Add
 ClickHouse only when MongoDB aggregate reads become too expensive, and add
 OpenSearch only when full-text investigation becomes a required product
 workflow.
+
+## Queue Layer
+
+Phase 4 introduces a Kafka-compatible queue abstraction with Redpanda as the
+local/self-hosted broker. The initial topics are:
+
+- `karaxys.http.conversations`
+- `karaxys.analyzer.jobs`
+- `karaxys.ingest.dead_letter`
+
+`internal/queue` contains the shared message envelope, producer/consumer
+interfaces, an in-memory test broker, and a `franz-go` Kafka-compatible backend.
+Docker Compose starts Redpanda and runs `rpk topic create` through
+`redpanda-init` for local topic bootstrap.
 
 ## Security Baseline
 
