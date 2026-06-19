@@ -80,6 +80,7 @@ func TrafficLog(logEntry core.TrafficLog) core.TrafficLog {
 	logEntry.URL = Text(logEntry.URL)
 	logEntry.ReqHeaders = Headers(logEntry.ReqHeaders)
 	logEntry.ReqBody = Text(logEntry.ReqBody)
+	logEntry.RespHeaders = Headers(logEntry.RespHeaders)
 	logEntry.RespBody = Text(logEntry.RespBody)
 	return logEntry
 }

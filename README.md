@@ -106,6 +106,29 @@ The eBPF ingestion endpoint is intentionally separate. It accepts per-agent
 tokens returned by `POST /agents/register`. `KARAXYS_AGENT_TOKEN` is still
 supported only as a local compatibility fallback.
 
+## Runtime Analyzer And Inventory
+
+The runtime analyzer builds API inventory from captured conversations without
+using process-memory endpoint clustering. Endpoint identity is deterministic:
+
+- API version segments such as `/v1` are preserved.
+- Numeric IDs, UUIDs, Mongo ObjectIDs, hashes, ULIDs, KSUID-like tokens, and
+  prefixed IDs such as `user_123` are parameterized.
+- Slug-like route segments are preserved unless they match an opaque identifier
+  pattern.
+- Each endpoint receives an `endpoint_fingerprint` derived from tenant, project,
+  method, base URL, and normalized path pattern.
+
+`api_inventory` records use `api.inventory.v2` fields for path examples,
+request/response/header/query schemas, response status codes, content types,
+auth observation, risk reasons, tags, request counts, first/last seen timestamps,
+and redacted samples.
+
+`api_parameters` stores parameter observations separately by endpoint
+fingerprint, location, and name. Locations currently include path, query,
+header, cookie, request body, and response body. Sample values are capped and
+stored only after redaction.
+
 ## Security Baseline
 
 Karaxys redacts common secrets before persistence in the current backend data

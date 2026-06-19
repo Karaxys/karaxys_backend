@@ -8,26 +8,30 @@ import (
 
 var ErrTrafficLogDropped = errors.New("traffic log dropped by retention policy")
 
+const InventorySchemaV2 = "api.inventory.v2"
+
 type TrafficLog struct {
-	ID            primitive.ObjectID  `bson:"_id,omitempty"`
-	SchemaVersion string              `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
-	TenantID      string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
-	ProjectID     string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
-	CaptureSource string              `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
-	CaptureMode   string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
-	AgentID       string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
-	CreatedAt     time.Time           `bson:"created_at"`
-	Method        string              `bson:"method"`
-	URL           string              `bson:"url"`
-	Host          string              `bson:"host"`
-	Path          string              `bson:"path"`
-	ReqHeaders    map[string][]string `bson:"req_headers"`
-	ReqBody       string              `bson:"req_body"`
-	RespStatus    string              `bson:"resp_status"`
-	RespBody      string              `bson:"resp_body"`
-	Analyzed      bool                `bson:"analyzed"`
-	IsScanned     bool                `bson:"is_scanned"`
-	Tags          []string            `bson:"tags"`
+	ID             primitive.ObjectID  `bson:"_id,omitempty"`
+	SchemaVersion  string              `bson:"schema_version,omitempty" json:"schema_version,omitempty"`
+	TenantID       string              `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID      string              `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	CaptureSource  string              `bson:"capture_source,omitempty" json:"capture_source,omitempty"`
+	CaptureMode    string              `bson:"capture_mode,omitempty" json:"capture_mode,omitempty"`
+	AgentID        string              `bson:"agent_id,omitempty" json:"agent_id,omitempty"`
+	CreatedAt      time.Time           `bson:"created_at"`
+	Method         string              `bson:"method"`
+	URL            string              `bson:"url"`
+	Host           string              `bson:"host"`
+	Path           string              `bson:"path"`
+	ReqHeaders     map[string][]string `bson:"req_headers"`
+	ReqBody        string              `bson:"req_body"`
+	RespStatus     string              `bson:"resp_status"`
+	RespStatusCode int                 `bson:"resp_status_code,omitempty"`
+	RespHeaders    map[string][]string `bson:"resp_headers,omitempty"`
+	RespBody       string              `bson:"resp_body"`
+	Analyzed       bool                `bson:"analyzed"`
+	IsScanned      bool                `bson:"is_scanned"`
+	Tags           []string            `bson:"tags"`
 }
 
 type TrafficConversation struct {
@@ -231,24 +235,60 @@ type Agent struct {
 }
 
 type ApiInventory struct {
-	ID             primitive.ObjectID  `bson:"_id,omitempty"`
-	TenantID       string              `bson:"tenant_id,omitempty"`
-	ProjectID      string              `bson:"project_id,omitempty"`
-	AgentID        string              `bson:"agent_id,omitempty"`
-	CaptureSource  string              `bson:"capture_source,omitempty"`
-	Method         string              `bson:"method"`
-	BaseURL        string              `bson:"base_url"`
-	PathPattern    string              `bson:"path_pattern"`
-	OriginalPath   string              `bson:"original_path"`
-	SensitiveData  []string            `bson:"sensitive_data"`
-	RiskLevel      string              `bson:"risk_level"`
-	SchemaReq      map[string]string   `bson:"schema_req"`
-	SampleHeaders  map[string][]string `bson:"sample_headers"`
-	ParamValues    map[string][]string `bson:"param_values"`
-	SampleReqBody  string              `bson:"sample_req_body"`
-	SampleRespBody string              `bson:"sample_resp_body"`
-	CreatedAt      time.Time           `bson:"created_at"`
-	UpdatedAt      time.Time           `bson:"updated_at"`
+	ID                  primitive.ObjectID  `bson:"_id,omitempty"`
+	SchemaVersion       string              `bson:"schema_version,omitempty"`
+	EndpointFingerprint string              `bson:"endpoint_fingerprint,omitempty"`
+	TenantID            string              `bson:"tenant_id,omitempty"`
+	ProjectID           string              `bson:"project_id,omitempty"`
+	AgentID             string              `bson:"agent_id,omitempty"`
+	CaptureSource       string              `bson:"capture_source,omitempty"`
+	CaptureMode         string              `bson:"capture_mode,omitempty"`
+	Host                string              `bson:"host,omitempty"`
+	Method              string              `bson:"method"`
+	BaseURL             string              `bson:"base_url"`
+	PathPattern         string              `bson:"path_pattern"`
+	OriginalPath        string              `bson:"original_path"`
+	PathExamples        []string            `bson:"path_examples,omitempty"`
+	SensitiveData       []string            `bson:"sensitive_data"`
+	RiskLevel           string              `bson:"risk_level"`
+	RiskReasons         []string            `bson:"risk_reasons,omitempty"`
+	Tags                []string            `bson:"tags,omitempty"`
+	SchemaReq           map[string]string   `bson:"schema_req"`
+	SchemaResp          map[string]string   `bson:"schema_resp,omitempty"`
+	HeaderSchema        map[string]string   `bson:"header_schema,omitempty"`
+	SampleHeaders       map[string][]string `bson:"sample_headers"`
+	ParamValues         map[string][]string `bson:"param_values"`
+	SampleReqBody       string              `bson:"sample_req_body"`
+	SampleRespBody      string              `bson:"sample_resp_body"`
+	StatusCodes         []int               `bson:"status_codes,omitempty"`
+	ContentTypes        []string            `bson:"content_types,omitempty"`
+	AuthObserved        bool                `bson:"auth_observed,omitempty"`
+	RequestCount        int64               `bson:"request_count,omitempty"`
+	FirstSeenAt         time.Time           `bson:"first_seen_at,omitempty"`
+	LastSeenAt          time.Time           `bson:"last_seen_at,omitempty"`
+	CreatedAt           time.Time           `bson:"created_at"`
+	UpdatedAt           time.Time           `bson:"updated_at"`
+}
+
+type APIParameter struct {
+	ID                  primitive.ObjectID `bson:"_id,omitempty"`
+	TenantID            string             `bson:"tenant_id,omitempty"`
+	ProjectID           string             `bson:"project_id,omitempty"`
+	EndpointFingerprint string             `bson:"endpoint_fingerprint"`
+	Method              string             `bson:"method"`
+	BaseURL             string             `bson:"base_url"`
+	PathPattern         string             `bson:"path_pattern"`
+	Name                string             `bson:"name"`
+	Location            string             `bson:"location"`
+	DataTypes           []string           `bson:"data_types,omitempty"`
+	SensitiveData       []string           `bson:"sensitive_data,omitempty"`
+	SampleValues        []string           `bson:"sample_values,omitempty"`
+	ObservedCount       int64              `bson:"observed_count,omitempty"`
+	Confidence          float64            `bson:"confidence,omitempty"`
+	FirstSeenAt         time.Time          `bson:"first_seen_at,omitempty"`
+	LastSeenAt          time.Time          `bson:"last_seen_at,omitempty"`
+	CreatedAt           time.Time          `bson:"created_at"`
+	UpdatedAt           time.Time          `bson:"updated_at"`
 }
 
 type ScanResult struct {

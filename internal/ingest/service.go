@@ -169,22 +169,24 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 
 func ConversationToTrafficLog(conversation contracts.HTTPConversation) core.TrafficLog {
 	return core.TrafficLog{
-		SchemaVersion: conversation.SchemaVersion,
-		TenantID:      conversation.TenantID,
-		ProjectID:     conversation.ProjectID,
-		CaptureSource: conversation.CaptureSource,
-		CaptureMode:   conversation.CaptureMode,
-		AgentID:       conversation.AgentID,
-		CreatedAt:     conversation.CapturedAt.Date,
-		Method:        conversation.HTTP.Request.Method,
-		URL:           conversation.HTTP.Request.URL,
-		Host:          conversation.HTTP.Request.Host,
-		Path:          analyzerPath(conversation.HTTP.Request),
-		ReqHeaders:    conversation.HTTP.Request.Headers,
-		ReqBody:       conversation.HTTP.Request.Body,
-		RespStatus:    conversation.HTTP.Response.Status,
-		RespBody:      conversation.HTTP.Response.Body,
-		Tags:          []string{"capture_source:" + conversation.CaptureSource},
+		SchemaVersion:  conversation.SchemaVersion,
+		TenantID:       conversation.TenantID,
+		ProjectID:      conversation.ProjectID,
+		CaptureSource:  conversation.CaptureSource,
+		CaptureMode:    conversation.CaptureMode,
+		AgentID:        conversation.AgentID,
+		CreatedAt:      conversation.CapturedAt.Date,
+		Method:         conversation.HTTP.Request.Method,
+		URL:            conversation.HTTP.Request.URL,
+		Host:           conversation.HTTP.Request.Host,
+		Path:           analyzerPath(conversation.HTTP.Request),
+		ReqHeaders:     conversation.HTTP.Request.Headers,
+		ReqBody:        conversation.HTTP.Request.Body,
+		RespStatus:     conversation.HTTP.Response.Status,
+		RespStatusCode: responseStatusCode(conversation.HTTP.Response.StatusCode),
+		RespHeaders:    conversation.HTTP.Response.Headers,
+		RespBody:       conversation.HTTP.Response.Body,
+		Tags:           []string{"capture_source:" + conversation.CaptureSource},
 	}
 }
 
@@ -213,6 +215,13 @@ func ConversationToTrafficConversation(conversation contracts.HTTPConversation) 
 		RespHeaders:    conversation.HTTP.Response.Headers,
 		RespBody:       conversation.HTTP.Response.Body,
 	}
+}
+
+func responseStatusCode(statusCode *int) int {
+	if statusCode == nil {
+		return 0
+	}
+	return *statusCode
 }
 
 func bindAgentIdentity(conversation *contracts.HTTPConversation, auth *AgentAuth) error {

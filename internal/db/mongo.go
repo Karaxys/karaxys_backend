@@ -37,6 +37,7 @@ type DB struct {
 	DataSources          *mongo.Collection
 	AgentEnrollments     *mongo.Collection
 	Agents               *mongo.Collection
+	APIParameters        *mongo.Collection
 	LogRetention         LogRetention
 }
 
@@ -102,6 +103,7 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		DataSources:          mongoDB.Collection("data_sources"),
 		AgentEnrollments:     mongoDB.Collection("agent_enrollments"),
 		Agents:               mongoDB.Collection("agents"),
+		APIParameters:        mongoDB.Collection("api_parameters"),
 		LogRetention:         retention,
 	}
 	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
@@ -249,12 +251,33 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetName("api_inventory_tenant_updated_at"),
 		},
 		{
+			Keys:    bson.D{{Key: "endpoint_fingerprint", Value: 1}},
+			Options: options.Index().SetName("api_inventory_endpoint_fingerprint_unique").SetUnique(true).SetPartialFilterExpression(bson.M{"endpoint_fingerprint": bson.M{"$type": "string"}}),
+		},
+		{
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "method", Value: 1}, {Key: "base_url", Value: 1}, {Key: "path_pattern", Value: 1}},
 			Options: options.Index().SetName("api_inventory_tenant_endpoint"),
 		},
 		{
 			Keys:    bson.D{{Key: "capture_source", Value: 1}, {Key: "updated_at", Value: -1}},
 			Options: options.Index().SetName("api_inventory_capture_source_updated_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "api_parameters", db.APIParameters, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "endpoint_fingerprint", Value: 1}, {Key: "location", Value: 1}, {Key: "name", Value: 1}},
+			Options: options.Index().SetName("api_parameters_endpoint_location_name_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "location", Value: 1}, {Key: "updated_at", Value: -1}},
+			Options: options.Index().SetName("api_parameters_tenant_location_updated_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "sensitive_data", Value: 1}, {Key: "updated_at", Value: -1}},
+			Options: options.Index().SetName("api_parameters_sensitive_updated_at"),
 		},
 	}); err != nil {
 		return err
