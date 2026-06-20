@@ -14,6 +14,7 @@ require (
 	github.com/twmb/franz-go v1.21.3
 	github.com/xeipuuv/gojsonschema v1.2.0
 	go.mongodb.org/mongo-driver v1.17.9
+	golang.org/x/crypto v0.51.0
 	golang.org/x/time v0.14.0
 )
 
@@ -382,7 +383,6 @@ require (
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	goftp.io/server/v2 v2.0.1 // indirect
 	golang.org/x/arch v0.3.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20260527015227-08cc5374adb3 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
