@@ -41,6 +41,8 @@ type ContainerMetadata struct {
 	Namespace string `json:"namespace,omitempty"`
 	Pod       string `json:"pod,omitempty"`
 	Node      string `json:"node,omitempty"`
+	Runtime   string `json:"runtime,omitempty"`
+	PodUID    string `json:"pod_uid,omitempty"`
 }
 
 type LossMetadata struct {

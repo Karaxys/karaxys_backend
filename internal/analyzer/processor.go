@@ -387,22 +387,16 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 		"host":                 host,
 	}
 	setFields := bson.M{
-		"schema_version":       core.InventorySchemaV2,
-		"endpoint_fingerprint": fingerprint,
-		"updated_at":           now,
-		"last_seen_at":         observedAt(logEntry, now),
-		"sample_req_body":      redactedLogEntry.ReqBody,
-		"sample_resp_body":     redactedLogEntry.RespBody,
-		"schema_req":           reqSchema,
-		"schema_resp":          respSchema,
-		"header_schema":        headerSchema(logEntry.ReqHeaders),
-		"risk_level":           calculatedRisk,
-		"risk_reasons":         riskReasons,
-		"auth_observed":        authObserved,
-		"method":               strings.ToUpper(strings.TrimSpace(logEntry.Method)),
-		"path_pattern":         pathPattern,
-		"base_url":             baseURL,
-		"host":                 host,
+		"updated_at":       now,
+		"last_seen_at":     observedAt(logEntry, now),
+		"sample_req_body":  redactedLogEntry.ReqBody,
+		"sample_resp_body": redactedLogEntry.RespBody,
+		"schema_req":       reqSchema,
+		"schema_resp":      respSchema,
+		"header_schema":    headerSchema(logEntry.ReqHeaders),
+		"risk_level":       calculatedRisk,
+		"risk_reasons":     riskReasons,
+		"auth_observed":    authObserved,
 	}
 	addToSet := bson.M{}
 	push := bson.M{}
@@ -413,11 +407,9 @@ func (e *Processor) ProcessLog(logEntry core.TrafficLog) {
 	}
 	if logEntry.TenantID != "" {
 		setOnInsert["tenant_id"] = logEntry.TenantID
-		setFields["tenant_id"] = logEntry.TenantID
 	}
 	if logEntry.ProjectID != "" {
 		setOnInsert["project_id"] = logEntry.ProjectID
-		setFields["project_id"] = logEntry.ProjectID
 	}
 	if logEntry.AgentID != "" {
 		setFields["agent_id"] = logEntry.AgentID
@@ -518,11 +510,9 @@ func (e *Processor) upsertParameters(ctx context.Context, logEntry core.TrafficL
 		}
 		if logEntry.TenantID != "" {
 			setOnInsert["tenant_id"] = logEntry.TenantID
-			setFields["tenant_id"] = logEntry.TenantID
 		}
 		if logEntry.ProjectID != "" {
 			setOnInsert["project_id"] = logEntry.ProjectID
-			setFields["project_id"] = logEntry.ProjectID
 		}
 		addToSet := bson.M{}
 		if observation.DataType != "" {

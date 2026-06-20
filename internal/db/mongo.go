@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -16,7 +18,7 @@ const (
 	defaultTrafficLogTTL       = 24 * time.Hour
 	mongoConnectTimeout        = 10 * time.Second
 	mongoPingTimeout           = 10 * time.Second
-	mongoIndexTimeout          = 60 * time.Second
+	defaultMongoIndexTimeout   = 5 * time.Minute
 )
 
 type DB struct {
@@ -114,13 +116,26 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		TrafficMetricEvents:  mongoDB.Collection("traffic_metric_events"),
 		LogRetention:         retention,
 	}
-	indexCtx, indexCancel := context.WithTimeout(context.Background(), mongoIndexTimeout)
+	indexTimeout := mongoIndexTimeout()
+	indexCtx, indexCancel := context.WithTimeout(context.Background(), indexTimeout)
 	defer indexCancel()
 	if err := database.EnsureIndexes(indexCtx); err != nil {
 		_ = client.Disconnect(context.Background())
-		return nil, fmt.Errorf("failed to create MongoDB indexes: %w", err)
+		return nil, fmt.Errorf("failed to create MongoDB indexes within %s: %w", indexTimeout, err)
 	}
 	return database, nil
+}
+
+func mongoIndexTimeout() time.Duration {
+	raw := os.Getenv("MONGO_INDEX_TIMEOUT_SECONDS")
+	if raw == "" {
+		return defaultMongoIndexTimeout
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return defaultMongoIndexTimeout
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (db *DB) Disconnect() {

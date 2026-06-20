@@ -1,14 +1,16 @@
-.PHONY: mongo redis minio redpanda infra services api api-queued ingestor runtime-analyzer dead-letter-consumer scanner-worker legacy-proxy test
+.PHONY: mongo redis minio redpanda infra services api api-queued ingestor runtime-analyzer dead-letter-consumer scanner-worker legacy-proxy local-bootstrap test
 
 MONGO_URI ?= mongodb://127.0.0.1:27017/?directConnection=true
 MONGO_DB_NAME ?= karaxys
 TRAFFIC_LOG_MAX_EVENTS ?= 1000
 TRAFFIC_LOG_TTL_HOURS ?= 24
+MONGO_INDEX_TIMEOUT_SECONDS ?= 300
 
 export MONGO_URI
 export MONGO_DB_NAME
 export TRAFFIC_LOG_MAX_EVENTS
 export TRAFFIC_LOG_TTL_HOURS
+export MONGO_INDEX_TIMEOUT_SECONDS
 
 mongo:
 	docker compose up -d mongo redis
@@ -48,6 +50,9 @@ scanner-worker:
 
 legacy-proxy:
 	go run ./cmd/cli
+
+local-bootstrap:
+	bash scripts/local-bootstrap.sh
 
 test:
 	go test ./...

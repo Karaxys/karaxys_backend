@@ -39,7 +39,9 @@
     "image": "karaxys/orders-api:dev",
     "namespace": "default",
     "pod": "orders-api-778b9c6d9f-pk8xq",
-    "node": "worker-01"
+    "node": "worker-01",
+    "runtime": "containerd",
+    "pod_uid": "6d52cb1e-2f41-42db-a789-61f040d88701"
   },
   "loss": {
     "truncated": false,

@@ -31,6 +31,11 @@ schemas because the current runtime structs do not populate them yet. Production
 ingestion should require those fields once authentication and multi-project
 scoping are implemented.
 
+Container metadata fields are best-effort and additive. The current eBPF agent
+can emit container ID, runtime, Docker name/image when the Docker socket is
+available, and Kubernetes pod namespace/name/node when cgroup pod UID plus
+service-account API access are available.
+
 ## Validation
 
 Schema and example JSON files can be syntax-checked with:

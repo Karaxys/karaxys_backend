@@ -25,6 +25,7 @@ Default local values:
 - `KARAXYS_QUEUE_BROKERS=127.0.0.1:19092`
 - `TRAFFIC_LOG_MAX_EVENTS=1000`
 - `TRAFFIC_LOG_TTL_HOURS=24`
+- `MONGO_INDEX_TIMEOUT_SECONDS=300`
 
 `traffic_logs` are short-retention capture data. The backend creates a TTL index
 on `created_at` and prunes older records so only the newest configured events
@@ -139,6 +140,8 @@ Useful endpoints:
 - `DELETE /data-sources/{id}`
 - `POST /agent-enrollments`
 - `POST /agents/register`
+- `POST /agents/heartbeat`
+- `GET /agents/config`
 - `GET /settings/security`
 - `PUT /settings/security`
 - `POST /scan`
@@ -154,6 +157,12 @@ Normal backend API endpoints require either:
 The eBPF ingestion endpoint is intentionally separate. It accepts per-agent
 tokens returned by `POST /agents/register`. `KARAXYS_AGENT_TOKEN` is still
 supported only as a local compatibility fallback.
+
+The agent control endpoints also use per-agent tokens. `POST /agents/heartbeat`
+marks the agent as seen and returns the next config-poll interval. `GET
+/agents/config` returns safe remote capture settings derived from the eBPF data
+source, including target ports, ignored ports, syscall direction gates, and the
+16 KiB max payload capture ceiling used by the Phase 5 chunking path.
 
 ## Runtime Analyzer And Inventory
 
@@ -372,6 +381,19 @@ Expected worker signal:
 Terminal 3: create a user session, configure an eBPF data source, and generate
 an enrollment token.
 
+Recommended local bootstrap:
+
+```sh
+cd /home/shion/Documents/Karaxys/karaxys_backend
+make local-bootstrap
+```
+
+This refreshes `/tmp/karaxys_access_token`, creates a local VAmPI eBPF data
+source, creates a 24-hour enrollment token, and writes
+`/tmp/karaxys_enrollment_token`.
+
+Manual equivalent:
+
 ```sh
 cd /home/shion/Documents/Karaxys/karaxys_backend
 
@@ -384,7 +406,7 @@ ACCESS_TOKEN="$(curl -s -X POST "http://127.0.0.1:8081/auth/signup" \
 DATA_SOURCE_ID="$(curl -s -X POST "http://127.0.0.1:8081/data-sources" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"type":"EBPF_LINUX","name":"Local VAmPI eBPF"}' \
+  -d '{"type":"EBPF_LINUX","name":"Local VAmPI eBPF","target_url":"http://127.0.0.1:3000","config":{"target_ports":"5000","ignore_ports":"9092,27017,6379","capture_inbound":"true","capture_outbound":"true","max_payload_size":"16384"}}' \
   | jq -r '.id')"
 
 ENROLLMENT_TOKEN="$(curl -s -X POST "http://127.0.0.1:8081/agent-enrollments" \
@@ -421,8 +443,19 @@ token, receives a per-agent token, and starts the worker with that token.
 
 ```sh
 cd /home/shion/Documents/Karaxys/ebpf_tracer
+KAFKA_TOPIC="raw-network-traffic-$(date +%s)" \
 KARAXYS_BACKEND_URL=http://127.0.0.1:8081 \
 KARAXYS_ENROLLMENT_TOKEN="${ENROLLMENT_TOKEN}" \
+make local-vampi
+```
+
+Fish shell:
+
+```fish
+cd /home/shion/Documents/Karaxys/ebpf_tracer
+set -x KAFKA_TOPIC raw-network-traffic-(date +%s)
+set -x KARAXYS_BACKEND_URL http://127.0.0.1:8081
+set -x KARAXYS_ENROLLMENT_TOKEN (string trim (cat /tmp/karaxys_enrollment_token))
 make local-vampi
 ```
 
@@ -436,16 +469,46 @@ make smoke-traffic
 Expected backend ingestion signals:
 
 - `POST /v1/ingest/conversations | Status: 202`
+- `POST /agents/heartbeat | Status: 200` after the local script registers the
+  agent and starts the control plane
+- `GET /agents/config | Status: 200` during remote config polling
 - Analyzer logs for `/createdb`, `/users/v1/register`, and `/users/v1/login`
 - `GET /inventory | Status: 200` when inventory is queried
 
 Verify inventory from another shell:
 
 ```sh
+ACCESS_TOKEN="$(cat /tmp/karaxys_access_token)"
 curl -s "http://127.0.0.1:8081/inventory?limit=50" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   | jq
 ```
+
+Fish shell:
+
+```fish
+set ACCESS_TOKEN (string trim (cat /tmp/karaxys_access_token))
+curl -i "http://127.0.0.1:8081/inventory?limit=50" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+Use `curl -i` first when debugging. If the response is not `HTTP/1.1 200 OK`
+with JSON, piping to `jq` will fail with a parse error because the backend is
+returning an error page or plain-text error instead of inventory JSON.
+
+Expected successful inventory state after `make smoke-traffic`:
+
+- `total` is `3` for the current VAmPI smoke flow.
+- Entries are created for `GET /createdb`, `POST /users/v1/register`, and
+  `POST /users/v1/login`.
+- Each entry has `SchemaVersion: api.inventory.v2`,
+  `CaptureSource: ebpf`, `CaptureMode: container`, and
+  `BaseURL: http://127.0.0.1:3000`.
+- Sensitive request/response values such as passwords and JWTs are shown as
+  `[REDACTED]`.
+- Register and login endpoints are expected to be high or critical risk in the
+  local vulnerable target because credentials are observed and auth is not
+  observed on those requests.
 
 Verify account settings and the audited settings update path:
 

@@ -74,6 +74,8 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("DELETE /data-sources/{id}", s.handleDeleteDataSource)
 	mux.HandleFunc("POST /agent-enrollments", s.handleCreateAgentEnrollment)
 	mux.HandleFunc("POST /agents/register", s.handleRegisterAgent)
+	mux.HandleFunc("POST /agents/heartbeat", s.handleAgentHeartbeat)
+	mux.HandleFunc("GET /agents/config", s.handleAgentConfig)
 	mux.HandleFunc("GET /settings/security", s.handleGetSecuritySettings)
 	mux.HandleFunc("PUT /settings/security", s.handleUpdateSecuritySettings)
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)

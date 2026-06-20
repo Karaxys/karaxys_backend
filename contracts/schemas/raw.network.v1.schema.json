@@ -87,9 +87,9 @@
       "enum": [0, 1]
     },
     "event_type": {
-      "description": "0 means data event, 1 means close event in the current tracer.",
+      "description": "0 means data event, 1 means close event, 2 means socket metadata event in the current tracer.",
       "type": "integer",
-      "enum": [0, 1]
+      "enum": [0, 1, 2]
     },
     "flags": {
       "type": "integer",
@@ -193,6 +193,12 @@
           "type": "string"
         },
         "node": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "pod_uid": {
           "type": "string"
         }
       }

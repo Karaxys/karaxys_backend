@@ -216,6 +216,12 @@
         },
         "node": {
           "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "pod_uid": {
+          "type": "string"
         }
       }
     },

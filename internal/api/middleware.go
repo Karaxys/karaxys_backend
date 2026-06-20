@@ -348,7 +348,7 @@ func isExemptPath(path string) bool {
 		return true
 	}
 	switch path {
-	case "/auth/signup", "/auth/login", "/auth/refresh", "/agents/register":
+	case "/auth/signup", "/auth/login", "/auth/refresh", "/agents/register", "/agents/heartbeat", "/agents/config":
 		return true
 	default:
 		return false
