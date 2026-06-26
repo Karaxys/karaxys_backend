@@ -347,6 +347,10 @@ func isExemptPath(path string) bool {
 	if isIngestionPath(path) {
 		return true
 	}
+	// OAuth start/callback are browser redirects without a bearer token.
+	if strings.HasPrefix(path, "/auth/oauth/") {
+		return true
+	}
 	switch path {
 	case "/auth/signup", "/auth/login", "/auth/refresh", "/agents/register", "/agents/heartbeat", "/agents/config":
 		return true

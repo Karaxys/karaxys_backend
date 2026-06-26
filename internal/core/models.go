@@ -200,6 +200,24 @@ type Session struct {
 }
 
 const (
+	OAuthProviderGoogle = "google"
+	OAuthProviderGitHub = "github"
+)
+
+// OAuthIdentity links a third-party provider account to a Karaxys user.
+type OAuthIdentity struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	UserID         primitive.ObjectID `bson:"user_id" json:"user_id"`
+	AccountID      primitive.ObjectID `bson:"account_id" json:"account_id"`
+	Provider       string             `bson:"provider" json:"provider"`
+	ProviderUserID string             `bson:"provider_user_id" json:"provider_user_id"`
+	Email          string             `bson:"email,omitempty" json:"email,omitempty"`
+	EmailVerified  bool               `bson:"email_verified" json:"email_verified"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+const (
 	DataSourceTypeActiveURL      = "ACTIVE_URL"
 	DataSourceTypeEBPFLinux      = "EBPF_LINUX"
 	DataSourceTypeEBPFKubernetes = "EBPF_KUBERNETES"

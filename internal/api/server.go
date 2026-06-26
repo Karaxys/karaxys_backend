@@ -70,6 +70,8 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("POST /auth/refresh", s.handleRefresh)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/me", s.handleMe)
+	mux.HandleFunc("GET /auth/oauth/{provider}", s.handleOAuthStart)
+	mux.HandleFunc("GET /auth/oauth/{provider}/callback", s.handleOAuthCallback)
 	mux.HandleFunc("GET /quick-start", s.handleQuickStartState)
 	mux.HandleFunc("POST /api/fetchQuickStartPageState", s.handleQuickStartState)
 	mux.HandleFunc("GET /data-sources", s.handleListDataSources)

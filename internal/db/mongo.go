@@ -38,6 +38,7 @@ type DB struct {
 	AccountSettings      *mongo.Collection
 	Users                *mongo.Collection
 	Sessions             *mongo.Collection
+	OAuthIdentities      *mongo.Collection
 	DataSources          *mongo.Collection
 	AgentEnrollments     *mongo.Collection
 	Agents               *mongo.Collection
@@ -110,6 +111,7 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		AccountSettings:      mongoDB.Collection("account_settings"),
 		Users:                mongoDB.Collection("users"),
 		Sessions:             mongoDB.Collection("sessions"),
+		OAuthIdentities:      mongoDB.Collection("oauth_identities"),
 		DataSources:          mongoDB.Collection("data_sources"),
 		AgentEnrollments:     mongoDB.Collection("agent_enrollments"),
 		Agents:               mongoDB.Collection("agents"),
@@ -523,6 +525,19 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("sessions_user_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "oauth_identities", db.OAuthIdentities, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "provider", Value: 1}, {Key: "provider_user_id", Value: 1}},
+			Options: options.Index().SetName("oauth_identities_provider_user_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "user_id", Value: 1}},
+			Options: options.Index().SetName("oauth_identities_user"),
 		},
 	}); err != nil {
 		return err
