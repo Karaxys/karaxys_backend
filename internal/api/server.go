@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"karaxys_backend/internal/analyzer"
 	"karaxys_backend/internal/config"
 	"karaxys_backend/internal/coordination"
@@ -87,6 +88,10 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("POST /v1/scans", s.handleTriggerScan)
 	mux.HandleFunc("GET /v1/scans/{id}", s.handleGetScanJob)
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.handleCancelScanJob)
+	mux.HandleFunc("POST /v1/scans/{id}/rerun", s.handleRerunScanJob)
+	mux.HandleFunc("GET /v1/scans/{id}/events", s.handleGetScanProgressEvents)
+	mux.HandleFunc("GET /issues", s.handleListIssues)
+	mux.HandleFunc("GET /v1/issues", s.handleListIssues)
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
 
@@ -273,17 +278,26 @@ func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 type ScanRequest struct {
-	InventoryID    string `json:"inventory_id"`
-	TestType       string `json:"test_type"`
-	AttackerToken  string `json:"attacker_token"`
-	AttackMethod   string `json:"attack_method"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	InventoryID    string            `json:"inventory_id"`
+	TestType       string            `json:"test_type"`
+	AttackerToken  string            `json:"attacker_token"`
+	AuthContexts   map[string]string `json:"auth_contexts,omitempty"`
+	AttackMethod   string            `json:"attack_method"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+}
+
+type ScanRerunRequest struct {
+	AttackerToken  string            `json:"attacker_token"`
+	AuthContexts   map[string]string `json:"auth_contexts,omitempty"`
+	AttackMethod   string            `json:"attack_method"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 }
 
 type ScanJobResponse struct {
 	JobID          string `json:"job_id"`
 	Status         string `json:"status"`
 	InventoryID    string `json:"inventory_id"`
+	RerunOfJobID   string `json:"rerun_of_job_id,omitempty"`
 	TestType       string `json:"test_type"`
 	Error          string `json:"error,omitempty"`
 	ResultsCount   int    `json:"results_count,omitempty"`
@@ -351,10 +365,12 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	target = s.applyLatestTrafficSample(target)
 
-	config, err := scanplan.BuildScanConfig(
+	config, err := scanplan.BuildScanConfigWithAuthContexts(
 		target.BaseURL,
 		&target,
+		req.AuthContexts,
 		req.AttackerToken,
 		req.AttackMethod,
 		req.TestType,
@@ -398,6 +414,9 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.auditScanCreate(r, job.ID.Hex(), req, core.AuditStatusSuccess, "")
+	if err := s.publishScanJobQueued(r.Context(), job); err != nil {
+		log.Printf("Failed to publish scan job event job=%s: %v", job.ID.Hex(), err)
+	}
 	log.Printf("Scan queued: job=%s test=%s target=%s", job.ID.Hex(), req.TestType, target.PathPattern)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -406,6 +425,7 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		JobID:          job.ID.Hex(),
 		Status:         job.Status,
 		InventoryID:    target.ID.Hex(),
+		RerunOfJobID:   objectIDHexOrEmpty(job.RerunOfJobID),
 		TestType:       job.TestType,
 		ResultsCount:   job.ResultsCount,
 		TimeoutSeconds: job.TimeoutSeconds,
@@ -535,6 +555,7 @@ func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
 		JobID:          job.ID.Hex(),
 		Status:         job.Status,
 		InventoryID:    job.InventoryID.Hex(),
+		RerunOfJobID:   objectIDHexOrEmpty(job.RerunOfJobID),
 		TestType:       job.TestType,
 		Error:          job.Error,
 		ResultsCount:   job.ResultsCount,
@@ -577,6 +598,196 @@ func (s *Server) handleCancelScanJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, scanJobResponse(job))
 }
 
+func (s *Server) handleRerunScanJob(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, scanRoles...)
+	if !ok {
+		return
+	}
+	idStr := r.PathValue("id")
+	originalID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		http.Error(w, "Invalid scan job ID", http.StatusBadRequest)
+		return
+	}
+	originalJob, err := s.DB.GetScanJob(originalID)
+	if err != nil {
+		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+		return
+	}
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		if originalJob.TenantID != principal.AccountID {
+			http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+			return
+		}
+	}
+
+	var req ScanRerunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	var target core.ApiInventory
+	filter := bson.M{"_id": originalJob.InventoryID}
+	if originalJob.TenantID != "" {
+		filter["tenant_id"] = originalJob.TenantID
+	}
+	if err := s.DB.Client.Database(s.DBName).Collection("api_inventory").FindOne(r.Context(), filter).Decode(&target); err != nil {
+		http.Error(w, "Endpoint Not Found", http.StatusNotFound)
+		return
+	}
+	if target.BaseURL == "" {
+		http.Error(w, "Target BaseURL missing in inventory. Re-capture traffic.", http.StatusBadRequest)
+		return
+	}
+	if err := scanpolicy.LoadTargetPolicyFromEnv().ValidateTargetURL(r.Context(), target.BaseURL); err != nil {
+		http.Error(w, "Target blocked by scan policy: "+err.Error(), scanPolicyHTTPStatus(err))
+		return
+	}
+
+	attackMethod := strings.TrimSpace(req.AttackMethod)
+	if attackMethod == "" {
+		attackMethod = originalJob.AttackMethod
+	}
+	timeoutSeconds := req.TimeoutSeconds
+	if timeoutSeconds == 0 {
+		timeoutSeconds = originalJob.TimeoutSeconds
+	}
+	timeoutSeconds, err = normalizeScanTimeout(timeoutSeconds)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	target = s.applyLatestTrafficSample(target)
+	config, err := scanplan.BuildScanConfigWithAuthContexts(target.BaseURL, &target, req.AuthContexts, req.AttackerToken, attackMethod, originalJob.TestType)
+	if err != nil {
+		http.Error(w, "Config Error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	config = scancontrol.ApplyExecutionLimits(config, scancontrol.LoadConfigFromEnv())
+
+	newJobID := primitive.NewObjectID()
+	if err := s.externalizeScanAuthSecret(newJobID, &config); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, scansecrets.ErrSecretKeyMissing) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, "Scan secret setup failed: "+err.Error(), status)
+		return
+	}
+	job, err := s.DB.CreateScanJob(core.ScanJob{
+		ID:             newJobID,
+		TenantID:       target.TenantID,
+		ProjectID:      target.ProjectID,
+		InventoryID:    target.ID,
+		RerunOfJobID:   originalJob.ID,
+		Status:         core.ScanJobStatusQueued,
+		TestType:       originalJob.TestType,
+		AttackMethod:   attackMethod,
+		Config:         config,
+		TimeoutSeconds: timeoutSeconds,
+	})
+	if err != nil {
+		if config.AuthSecretRef != "" {
+			s.deleteScanSecret(config.AuthSecretRef)
+		}
+		http.Error(w, "Failed to enqueue scan rerun", http.StatusInternalServerError)
+		return
+	}
+	auditReq := ScanRequest{
+		InventoryID:    target.ID.Hex(),
+		TestType:       originalJob.TestType,
+		AttackMethod:   attackMethod,
+		TimeoutSeconds: timeoutSeconds,
+	}
+	s.auditScanCreate(r, job.ID.Hex(), auditReq, core.AuditStatusSuccess, "scan rerun")
+	if err := s.publishScanJobQueued(r.Context(), job); err != nil {
+		log.Printf("Failed to publish scan rerun event job=%s: %v", job.ID.Hex(), err)
+	}
+	writeJSON(w, http.StatusAccepted, scanJobResponse(&job))
+}
+
+func (s *Server) publishScanJobQueued(ctx context.Context, job core.ScanJob) error {
+	if s == nil || s.queueProducer == nil {
+		return nil
+	}
+	key := queue.ScanJobIdempotencyKey(job.ID.Hex())
+	if key == "" {
+		return fmt.Errorf("scan job id is required")
+	}
+	event := queue.ScanJobEvent{
+		SchemaVersion: queue.EventScanJobV1,
+		JobID:         job.ID.Hex(),
+		InventoryID:   job.InventoryID.Hex(),
+		TenantID:      job.TenantID,
+		ProjectID:     job.ProjectID,
+		TestType:      job.TestType,
+		Status:        job.Status,
+		CreatedAt:     time.Now().UTC(),
+	}
+	envelope, err := queue.NewEnvelope(
+		queue.EventScanJobV1,
+		queue.PayloadScanJobQueuedV1,
+		event,
+		queue.WithEventID(key),
+		queue.WithIdempotencyKey(key),
+		queue.WithIdentity(job.TenantID, job.ProjectID, "", "active_scanner"),
+	)
+	if err != nil {
+		return err
+	}
+	message, err := queue.EncodeEnvelope(queue.TopicScanJobs, key, envelope)
+	if err != nil {
+		return err
+	}
+	return s.queueProducer.Produce(ctx, message)
+}
+
+func (s *Server) handleGetScanProgressEvents(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	idStr := r.PathValue("id")
+	jobID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		http.Error(w, "Invalid scan job ID", http.StatusBadRequest)
+		return
+	}
+	job, err := s.DB.GetScanJob(jobID)
+	if err != nil {
+		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+		return
+	}
+	tenantID := ""
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		if job.TenantID != principal.AccountID {
+			http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+			return
+		}
+		tenantID = principal.AccountID
+	}
+	events, err := s.DB.GetScanProgressEvents(jobID, tenantID)
+	if err != nil {
+		http.Error(w, "Database Error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": events})
+}
+
 func scanJobResponse(job *core.ScanJob) ScanJobResponse {
 	if job == nil {
 		return ScanJobResponse{}
@@ -585,6 +796,7 @@ func scanJobResponse(job *core.ScanJob) ScanJobResponse {
 		JobID:          job.ID.Hex(),
 		Status:         job.Status,
 		InventoryID:    job.InventoryID.Hex(),
+		RerunOfJobID:   objectIDHexOrEmpty(job.RerunOfJobID),
 		TestType:       job.TestType,
 		Error:          job.Error,
 		ResultsCount:   job.ResultsCount,
@@ -601,6 +813,25 @@ func formatOptionalTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func objectIDHexOrEmpty(value primitive.ObjectID) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Hex()
+}
+
+func (s *Server) applyLatestTrafficSample(target core.ApiInventory) core.ApiInventory {
+	if s == nil || s.DB == nil {
+		return target
+	}
+	sample, err := s.DB.ResolveLatestTrafficSample(target)
+	if err != nil {
+		log.Printf("Failed to resolve latest traffic sample inventory=%s: %v", target.ID.Hex(), err)
+		return target
+	}
+	return db.ApplyTrafficSampleToInventory(target, sample)
 }
 
 func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
@@ -660,6 +891,52 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
+}
+
+func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	sortBy := r.URL.Query().Get("sort_by")
+	sortOrder := r.URL.Query().Get("sort_order")
+	status := r.URL.Query().Get("status")
+	severity := r.URL.Query().Get("severity")
+	inventoryIDStr := r.URL.Query().Get("inventory_id")
+
+	var inventoryID *primitive.ObjectID
+	if inventoryIDStr != "" {
+		objID, err := primitive.ObjectIDFromHex(inventoryIDStr)
+		if err != nil {
+			http.Error(w, "Invalid inventory_id", http.StatusBadRequest)
+			return
+		}
+		inventoryID = &objID
+	}
+
+	tenantID := ""
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		tenantID = principal.AccountID
+	}
+	results, err := s.DB.GetIssues(db.Pagination{
+		Page:      page,
+		Limit:     limit,
+		Offset:    offset,
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
+	}, tenantID, status, severity, inventoryID)
+	if err != nil {
+		http.Error(w, "Database Error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) {

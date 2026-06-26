@@ -1,4 +1,4 @@
-.PHONY: mongo redis minio redpanda infra services api api-queued ingestor runtime-analyzer dead-letter-consumer scanner-worker legacy-proxy local-bootstrap test
+.PHONY: mongo redis minio redpanda infra services api api-queued ingestor runtime-analyzer dead-letter-consumer scanner-worker legacy-proxy local-bootstrap test test-fast test-scanner-worker test-scanner-integration
 
 MONGO_URI ?= mongodb://127.0.0.1:27017/?directConnection=true
 MONGO_DB_NAME ?= karaxys
@@ -56,3 +56,12 @@ local-bootstrap:
 
 test:
 	go test ./...
+
+test-fast:
+	go test $$(go list ./... | grep -v '/cmd/scanner-worker')
+
+test-scanner-worker:
+	go test ./cmd/scanner-worker ./cmd/scanner-worker/internal/nucleiscanner ./internal/scanner ./internal/scancontrol ./internal/scanplan
+
+test-scanner-integration:
+	go test -tags=integration ./cmd/scanner-worker/internal/nucleiscanner

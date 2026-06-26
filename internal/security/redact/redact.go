@@ -98,6 +98,7 @@ func ScanResult(result core.ScanResult) core.ScanResult {
 	result.Description = Text(result.Description)
 	result.Proof = Text(result.Proof)
 	result.ResponseBody = Text(result.ResponseBody)
+	result.ResponseHeader = Text(result.ResponseHeader)
 	return result
 }
 

@@ -31,6 +31,7 @@ type DB struct {
 	ScanJobs             *mongo.Collection
 	ScanResults          *mongo.Collection
 	ScanSecrets          *mongo.Collection
+	ScanProgressEvents   *mongo.Collection
 	Issues               *mongo.Collection
 	AuditLogs            *mongo.Collection
 	Accounts             *mongo.Collection
@@ -102,6 +103,7 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		ScanJobs:             mongoDB.Collection("scan_jobs"),
 		ScanResults:          mongoDB.Collection("scan_results"),
 		ScanSecrets:          mongoDB.Collection("scan_secrets"),
+		ScanProgressEvents:   mongoDB.Collection("scan_progress_events"),
 		Issues:               mongoDB.Collection("issues"),
 		AuditLogs:            mongoDB.Collection("audit_logs"),
 		Accounts:             mongoDB.Collection("accounts"),
@@ -266,6 +268,10 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_jobs_tenant_created_at"),
 		},
+		{
+			Keys:    bson.D{{Key: "rerun_of_job_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_jobs_rerun_of_created_at"),
+		},
 	}); err != nil {
 		return err
 	}
@@ -295,6 +301,23 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_results_tenant_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "scan_progress_events", db.ScanProgressEvents, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "job_id", Value: 1}, {Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("scan_progress_events_job_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
+			Options: options.Index().SetName("scan_progress_events_tenant_created_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("scan_progress_events_created_at_ttl").SetExpireAfterSeconds(int32((7 * 24 * time.Hour).Seconds())),
 		},
 	}); err != nil {
 		return err

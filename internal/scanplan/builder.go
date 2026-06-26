@@ -21,8 +21,18 @@ const (
 	testExposedMetrics         = "EXPOSED_METRICS"
 )
 
+const (
+	AuthRoleAttacker = "attacker"
+	AuthRoleVictim   = "victim"
+	AuthRoleAdmin    = "admin"
+)
+
 func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManualToken string, reqMethod string, testType string) (core.ScanConfig, error) {
-	tokenToUse, err := resolveAuthToken(testType, inventory, reqManualToken)
+	return BuildScanConfigWithAuthContexts(targetBaseURL, inventory, map[string]string{AuthRoleAttacker: reqManualToken}, reqManualToken, reqMethod, testType)
+}
+
+func BuildScanConfigWithAuthContexts(targetBaseURL string, inventory *core.ApiInventory, authContexts map[string]string, legacyManualToken string, reqMethod string, testType string) (core.ScanConfig, error) {
+	tokenToUse, err := resolveAuthTokenFromContexts(testType, inventory, authContexts, legacyManualToken)
 	if err != nil {
 		return core.ScanConfig{}, err
 	}
@@ -54,6 +64,101 @@ func BuildScanConfig(targetBaseURL string, inventory *core.ApiInventory, reqManu
 		ManualAuth:   tokenToUse,
 		AttackMethod: methodToUse,
 	}, nil
+}
+
+func resolveAuthTokenFromContexts(testType string, inventory *core.ApiInventory, authContexts map[string]string, legacyManualToken string) (string, error) {
+	normalizedContexts := normalizeAuthContexts(authContexts)
+	if usableToken(legacyManualToken) {
+		if _, ok := normalizedContexts[AuthRoleAttacker]; !ok {
+			normalizedContexts[AuthRoleAttacker] = legacyManualToken
+		}
+		if _, ok := normalizedContexts[AuthRoleVictim]; !ok {
+			normalizedContexts[AuthRoleVictim] = legacyManualToken
+		}
+	}
+
+	switch testType {
+	case testBOLA, testBOLAParameterPollution:
+		token := pickContextToken(normalizedContexts, AuthRoleAttacker)
+		if token == "" {
+			token = pickToken("", inventory, 1)
+		}
+		if token == "" {
+			return "", fmt.Errorf("BOLA requires an attacker auth context")
+		}
+		return token, nil
+	case testBrokenUserAuth:
+		return "", nil
+	case testJWTNoneAlgo:
+		validToken := pickContextToken(normalizedContexts, AuthRoleVictim)
+		if validToken == "" {
+			validToken = pickToken("", inventory, 0)
+		}
+		if validToken == "" {
+			return "", fmt.Errorf("JWT_NONE_ALGO requires a victim auth context")
+		}
+		forged, err := forgeNoneToken(validToken)
+		if err != nil {
+			return "", fmt.Errorf("failed to forge token: %v", err)
+		}
+		return forged, nil
+	case testJWTInvalidSignature:
+		validToken := pickContextToken(normalizedContexts, AuthRoleVictim)
+		if validToken == "" {
+			validToken = pickToken("", inventory, 0)
+		}
+		if validToken == "" {
+			return "", fmt.Errorf("JWT_INVALID_SIGNATURE requires a victim auth context")
+		}
+		forged, err := tamperSignature(validToken)
+		if err != nil {
+			return "", err
+		}
+		return forged, nil
+	case testSwaggerCheck, testOpenRedirect, testExposedMetrics, testBFLA:
+		if token := firstContextToken(normalizedContexts, AuthRoleVictim, AuthRoleAttacker, AuthRoleAdmin); token != "" {
+			return token, nil
+		}
+		return pickToken("", inventory, 0), nil
+	default:
+		if token := firstContextToken(normalizedContexts, AuthRoleVictim, AuthRoleAttacker, AuthRoleAdmin); token != "" {
+			return token, nil
+		}
+		return pickToken("", inventory, 0), nil
+	}
+}
+
+func normalizeAuthContexts(authContexts map[string]string) map[string]string {
+	normalized := map[string]string{}
+	for role, token := range authContexts {
+		role = strings.ToLower(strings.TrimSpace(role))
+		token = strings.TrimSpace(token)
+		if token == "" || token == redact.Marker {
+			continue
+		}
+		switch role {
+		case AuthRoleAttacker, AuthRoleVictim, AuthRoleAdmin:
+			normalized[role] = token
+		}
+	}
+	return normalized
+}
+
+func firstContextToken(authContexts map[string]string, roles ...string) string {
+	for _, role := range roles {
+		if token := pickContextToken(authContexts, role); token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func pickContextToken(authContexts map[string]string, role string) string {
+	token := strings.TrimSpace(authContexts[strings.ToLower(strings.TrimSpace(role))])
+	if usableToken(token) {
+		return token
+	}
+	return ""
 }
 
 func splitAuthHeader(originalAuthHeader string) (string, string) {

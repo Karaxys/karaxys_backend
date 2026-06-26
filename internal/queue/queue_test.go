@@ -73,6 +73,42 @@ func TestEnvelopeEncodeDecodePreservesMetadata(t *testing.T) {
 	}
 }
 
+func TestScanJobEnvelopeUsesStableIdempotencyKey(t *testing.T) {
+	event := ScanJobEvent{
+		SchemaVersion: EventScanJobV1,
+		JobID:         "6650f8cb1c5e7c6c1f93a111",
+		TenantID:      "tenant-1",
+		TestType:      "BROKEN_USER_AUTH",
+		CreatedAt:     time.Now().UTC(),
+	}
+	key := ScanJobIdempotencyKey(event.JobID)
+	envelope, err := NewEnvelope(
+		EventScanJobV1,
+		PayloadScanJobQueuedV1,
+		event,
+		WithEventID(key),
+		WithIdempotencyKey(key),
+		WithIdentity(event.TenantID, event.ProjectID, "", "active_scanner"),
+	)
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	message, err := EncodeEnvelope(TopicScanJobs, key, envelope)
+	if err != nil {
+		t.Fatalf("encode envelope: %v", err)
+	}
+	if message.Topic != TopicScanJobs || message.Key != key {
+		t.Fatalf("unexpected message: %#v", message)
+	}
+	decoded, err := DecodeEnvelope(message)
+	if err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if decoded.PayloadType != PayloadScanJobQueuedV1 || decoded.IdempotencyKey != key {
+		t.Fatalf("unexpected envelope: %#v", decoded)
+	}
+}
+
 func TestMemoryBrokerProducesAndConsumes(t *testing.T) {
 	broker := NewMemoryBroker(1)
 	producer := broker.Producer()

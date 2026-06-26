@@ -90,6 +90,7 @@ services:
         rpk topic create karaxys.http.conversations --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
         rpk topic create karaxys.analyzer.jobs --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
         rpk topic create karaxys.ingest.dead_letter --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
+        rpk topic create karaxys.scan.jobs --partitions 3 --replicas 1 -X brokers=redpanda:9092 || true;
         rpk topic list -X brokers=redpanda:9092
 
   api-server:
@@ -141,6 +142,7 @@ services:
       KARAXYS_QUEUE_CONSUMER_GROUP: karaxys-runtime-analyzer
       KARAXYS_RUNTIME_ANALYZER_CONSUMER_GROUP: karaxys-runtime-analyzer
       KARAXYS_DEAD_LETTER_CONSUMER_GROUP: karaxys-dead-letter-consumer
+      KARAXYS_SCANNER_WORKER_CONSUMER_GROUP: karaxys-scanner-worker
       KARAXYS_SECRET_KEY_B64: MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=
       TRAFFIC_LOG_MAX_EVENTS: "1000"
       TRAFFIC_LOG_TTL_HOURS: "24"

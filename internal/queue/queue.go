@@ -27,10 +27,12 @@ const (
 	EventHTTPConversationV1 = "queue.http_conversation.v1"
 	EventAnalyzerJobV1      = "queue.analyzer_job.v1"
 	EventDeadLetterV1       = "queue.dead_letter.v1"
+	EventScanJobV1          = "queue.scan_job.v1"
 )
 
 const (
 	PayloadHTTPConversationPersistedV1 = "http.conversation.persisted.v1"
+	PayloadScanJobQueuedV1             = "scan.job.queued.v1"
 )
 
 var DefaultTopics = []string{
@@ -107,6 +109,17 @@ type DeadLetter struct {
 	Reason        string    `json:"reason"`
 	Error         string    `json:"error,omitempty"`
 	Payload       string    `json:"payload,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type ScanJobEvent struct {
+	SchemaVersion string    `json:"schema_version"`
+	JobID         string    `json:"job_id"`
+	InventoryID   string    `json:"inventory_id,omitempty"`
+	TenantID      string    `json:"tenant_id,omitempty"`
+	ProjectID     string    `json:"project_id,omitempty"`
+	TestType      string    `json:"test_type,omitempty"`
+	Status        string    `json:"status,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -217,4 +230,12 @@ func HTTPConversationIdempotencyKey(conversationID string) string {
 		return ""
 	}
 	return "http_conversation:" + conversationID
+}
+
+func ScanJobIdempotencyKey(jobID string) string {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return ""
+	}
+	return "scan_job:" + jobID
 }

@@ -73,15 +73,17 @@ func TestTrafficLogRedactsStoredFields(t *testing.T) {
 
 func TestScanResultRedactsEvidence(t *testing.T) {
 	result := core.ScanResult{
-		Description:  "matched token=" + sampleJWT,
-		Proof:        "curl -H 'Authorization: Bearer " + sampleJWT + "'",
-		ResponseBody: "HTTP/1.1 200 OK\r\nSet-Cookie: session=secret-cookie\r\n\r\n{\"auth_token\":\"" + sampleJWT + "\"}",
+		Description:    "matched token=" + sampleJWT,
+		Proof:          "curl -H 'Authorization: Bearer " + sampleJWT + "'",
+		ResponseHeader: "Set-Cookie: session=secret-cookie",
+		ResponseBody:   "HTTP/1.1 200 OK\r\nSet-Cookie: session=secret-cookie\r\n\r\n{\"auth_token\":\"" + sampleJWT + "\"}",
 	}
 
 	redacted := ScanResult(result)
 
 	assertNotContains(t, redacted.Description, sampleJWT)
 	assertNotContains(t, redacted.Proof, sampleJWT)
+	assertNotContains(t, redacted.ResponseHeader, "secret-cookie")
 	assertNotContains(t, redacted.ResponseBody, sampleJWT)
 	assertNotContains(t, redacted.ResponseBody, "secret-cookie")
 }

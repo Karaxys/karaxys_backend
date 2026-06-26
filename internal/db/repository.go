@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -197,19 +200,35 @@ func (db *DB) GetScanJob(id primitive.ObjectID) (*core.ScanJob, error) {
 }
 
 func (db *DB) ClaimNextScanJob(workerID string) (*core.ScanJob, error) {
+	now := time.Now().UTC()
+	return db.claimScanJob(workerID, bson.M{
+		"status": core.ScanJobStatusQueued,
+		"$or": []bson.M{
+			{"not_before_at": bson.M{"$exists": false}},
+			{"not_before_at": bson.M{"$lte": now}},
+		},
+	})
+}
+
+func (db *DB) ClaimScanJobByID(id primitive.ObjectID, workerID string) (*core.ScanJob, error) {
+	now := time.Now().UTC()
+	return db.claimScanJob(workerID, bson.M{
+		"_id":    id,
+		"status": core.ScanJobStatusQueued,
+		"$or": []bson.M{
+			{"not_before_at": bson.M{"$exists": false}},
+			{"not_before_at": bson.M{"$lte": now}},
+		},
+	})
+}
+
+func (db *DB) claimScanJob(workerID string, filter bson.M) (*core.ScanJob, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
 	opts := options.FindOneAndUpdate().
 		SetSort(bson.D{{Key: "created_at", Value: 1}}).
 		SetReturnDocument(options.After)
-	filter := bson.M{
-		"status": core.ScanJobStatusQueued,
-		"$or": []bson.M{
-			{"not_before_at": bson.M{"$exists": false}},
-			{"not_before_at": bson.M{"$lte": now}},
-		},
-	}
 	update := bson.M{
 		"$set": bson.M{
 			"status":     core.ScanJobStatusRunning,
@@ -472,7 +491,7 @@ func sanitizeSortOrder(order string) int {
 	return -1
 }
 
-func (db *DB) SaveScanResult(scanRes core.ScanResult) error {
+func (db *DB) SaveScanResult(scanRes core.ScanResult) (*core.ScanResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	scanRes = redact.ScanResult(scanRes)
@@ -484,7 +503,262 @@ func (db *DB) SaveScanResult(scanRes core.ScanResult) error {
 		scanRes.CreatedAt = time.Now().UTC()
 	}
 	_, err := db.ScanResults.InsertOne(ctx, scanRes)
+	if err != nil {
+		return nil, err
+	}
+	return &scanRes, nil
+}
+
+func (db *DB) UpsertIssueFromScanResult(scanRes core.ScanResult) (*core.Issue, error) {
+	if !scanRes.Vulnerable {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var inventory core.ApiInventory
+	endpointFingerprint := ""
+	if !scanRes.InventoryID.IsZero() {
+		err := db.Client.Database(db.Name).Collection("api_inventory").FindOne(ctx, bson.M{"_id": scanRes.InventoryID}).Decode(&inventory)
+		if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, err
+		}
+		endpointFingerprint = inventory.EndpointFingerprint
+	}
+
+	now := time.Now().UTC()
+	if scanRes.CreatedAt.IsZero() {
+		scanRes.CreatedAt = now
+	}
+	fingerprint := issueFingerprint(scanRes.TenantID, scanRes.ProjectID, scanRes.InventoryID, endpointFingerprint, scanRes.TestType)
+	title := issueTitle(scanRes.TestType, inventory)
+	evidenceSummary := scanRes.Proof
+	if evidenceSummary == "" {
+		evidenceSummary = scanRes.Description
+	}
+	if len(evidenceSummary) > 2048 {
+		evidenceSummary = evidenceSummary[:2048]
+	}
+
+	setOnInsert := bson.M{
+		"_id":               primitive.NewObjectID(),
+		"tenant_id":         scanRes.TenantID,
+		"project_id":        scanRes.ProjectID,
+		"inventory_id":      scanRes.InventoryID,
+		"issue_fingerprint": fingerprint,
+		"test_type":         scanRes.TestType,
+		"status":            core.IssueStatusOpen,
+		"first_seen_at":     scanRes.CreatedAt,
+		"created_at":        now,
+	}
+	update := bson.M{
+		"$setOnInsert": setOnInsert,
+		"$set": bson.M{
+			"endpoint_fingerprint": endpointFingerprint,
+			"scan_job_id":          scanRes.JobID,
+			"scan_result_id":       scanRes.ID,
+			"severity":             strings.ToLower(strings.TrimSpace(scanRes.Severity)),
+			"title":                title,
+			"description":          scanRes.Description,
+			"evidence_summary":     evidenceSummary,
+			"last_seen_at":         scanRes.CreatedAt,
+			"updated_at":           now,
+		},
+	}
+	opts := options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)
+	var issue core.Issue
+	if err := db.Issues.FindOneAndUpdate(ctx, bson.M{"issue_fingerprint": fingerprint}, update, opts).Decode(&issue); err != nil {
+		return nil, err
+	}
+	return &issue, nil
+}
+
+func issueFingerprint(tenantID string, projectID string, inventoryID primitive.ObjectID, endpointFingerprint string, testType string) string {
+	source := strings.Join([]string{
+		strings.TrimSpace(tenantID),
+		strings.TrimSpace(projectID),
+		inventoryID.Hex(),
+		strings.TrimSpace(endpointFingerprint),
+		strings.TrimSpace(testType),
+	}, "|")
+	sum := sha256.Sum256([]byte(source))
+	return hex.EncodeToString(sum[:])
+}
+
+func issueTitle(testType string, inventory core.ApiInventory) string {
+	target := strings.TrimSpace(inventory.PathPattern)
+	if target == "" {
+		target = strings.TrimSpace(inventory.OriginalPath)
+	}
+	if target == "" {
+		target = "captured endpoint"
+	}
+	method := strings.TrimSpace(inventory.Method)
+	if method != "" {
+		target = method + " " + target
+	}
+	return fmt.Sprintf("%s on %s", strings.TrimSpace(testType), target)
+}
+
+func (db *DB) ResolveLatestTrafficSample(inventory core.ApiInventory) (*core.TrafficSample, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	filter := bson.M{}
+	if strings.TrimSpace(inventory.EndpointFingerprint) != "" {
+		filter["endpoint_fingerprint"] = inventory.EndpointFingerprint
+	} else {
+		filter["method"] = inventory.Method
+		filter["base_url"] = inventory.BaseURL
+		filter["path_pattern"] = inventory.PathPattern
+	}
+	if strings.TrimSpace(inventory.TenantID) != "" {
+		filter["tenant_id"] = inventory.TenantID
+	}
+	opts := options.FindOne().SetSort(bson.D{{Key: "captured_at", Value: -1}, {Key: "created_at", Value: -1}})
+	var sample core.TrafficSample
+	err := db.TrafficSamples.FindOne(ctx, filter, opts).Decode(&sample)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sample, nil
+}
+
+func ApplyTrafficSampleToInventory(inventory core.ApiInventory, sample *core.TrafficSample) core.ApiInventory {
+	if sample == nil {
+		return inventory
+	}
+	if strings.TrimSpace(sample.ReqBody) != "" {
+		inventory.SampleReqBody = sample.ReqBody
+	}
+	if len(sample.ReqHeaders) > 0 {
+		inventory.SampleHeaders = sample.ReqHeaders
+	}
+	if strings.TrimSpace(sample.OriginalPath) != "" {
+		inventory.OriginalPath = sample.OriginalPath
+	}
+	if strings.TrimSpace(sample.BaseURL) != "" {
+		inventory.BaseURL = sample.BaseURL
+	}
+	return inventory
+}
+
+func (db *DB) SaveScanProgressEvent(event core.ScanProgressEvent) error {
+	if db == nil || db.ScanProgressEvents == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if event.ID.IsZero() {
+		event.ID = primitive.NewObjectID()
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	_, err := db.ScanProgressEvents.InsertOne(ctx, event)
 	return err
+}
+
+func (db *DB) GetScanProgressEvents(jobID primitive.ObjectID, tenantID string) ([]core.ScanProgressEvent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	filter := bson.M{"job_id": jobID}
+	if strings.TrimSpace(tenantID) != "" {
+		filter["tenant_id"] = tenantID
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}})
+	cursor, err := db.ScanProgressEvents.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var events []core.ScanProgressEvent
+	if err := cursor.All(ctx, &events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (db *DB) GetIssues(p Pagination, tenantID string, status string, severity string, inventoryID *primitive.ObjectID) (*PaginatedResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if p.Limit < 1 {
+		p.Limit = 10
+	}
+	if p.Limit > 100 {
+		p.Limit = 100
+	}
+	if p.Offset < 0 {
+		p.Offset = 0
+	}
+	if p.Offset == 0 && p.Page > 0 {
+		p.Offset = (p.Page - 1) * p.Limit
+	}
+	if p.Page < 1 {
+		p.Page = (p.Offset / p.Limit) + 1
+	}
+
+	filter := bson.M{}
+	if strings.TrimSpace(tenantID) != "" {
+		filter["tenant_id"] = strings.TrimSpace(tenantID)
+	}
+	if strings.TrimSpace(status) != "" {
+		filter["status"] = strings.TrimSpace(status)
+	}
+	if strings.TrimSpace(severity) != "" {
+		filter["severity"] = strings.ToLower(strings.TrimSpace(severity))
+	}
+	if inventoryID != nil {
+		filter["inventory_id"] = *inventoryID
+	}
+
+	total, err := db.Issues.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	opts := options.Find().
+		SetLimit(int64(p.Limit)).
+		SetSkip(int64(p.Offset)).
+		SetSort(bson.D{{Key: sanitizeIssueSortField(p.SortBy), Value: sanitizeSortOrder(p.SortOrder)}})
+	cursor, err := db.Issues.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var issues []core.Issue
+	if err := cursor.All(ctx, &issues); err != nil {
+		return nil, err
+	}
+	totalPages := int(total) / p.Limit
+	if int(total)%p.Limit != 0 {
+		totalPages++
+	}
+	return &PaginatedResponse{
+		Data:       issues,
+		Total:      total,
+		Page:       p.Page,
+		Offset:     p.Offset,
+		Limit:      p.Limit,
+		TotalPages: totalPages,
+	}, nil
+}
+
+func sanitizeIssueSortField(field string) string {
+	switch strings.ToLower(field) {
+	case "first_seen_at":
+		return "first_seen_at"
+	case "last_seen_at":
+		return "last_seen_at"
+	case "severity":
+		return "severity"
+	case "status":
+		return "status"
+	default:
+		return "updated_at"
+	}
 }
 
 func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID) (*PaginatedResponse, error) {

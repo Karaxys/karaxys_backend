@@ -415,6 +415,7 @@ type ScanResult struct {
 	Description    string             `bson:"description"`
 	Proof          string             `bson:"proof"`
 	ResponseStatus int                `bson:"response_status"`
+	ResponseHeader string             `bson:"response_headers,omitempty" json:"response_headers,omitempty"`
 	ResponseBody   string             `bson:"response_body"`
 	CreatedAt      time.Time          `bson:"created_at"`
 }
@@ -469,6 +470,7 @@ type ScanJob struct {
 	TenantID          string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
 	ProjectID         string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	InventoryID       primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
+	RerunOfJobID      primitive.ObjectID `bson:"rerun_of_job_id,omitempty" json:"rerun_of_job_id,omitempty"`
 	Status            string             `bson:"status" json:"status"`
 	TestType          string             `bson:"test_type" json:"test_type"`
 	AttackMethod      string             `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
@@ -486,6 +488,19 @@ type ScanJob struct {
 	CompletedAt       time.Time          `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 	CancelRequestedAt time.Time          `bson:"cancel_requested_at,omitempty" json:"cancel_requested_at,omitempty"`
 	CancelledAt       time.Time          `bson:"cancelled_at,omitempty" json:"cancelled_at,omitempty"`
+}
+
+type ScanProgressEvent struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	TenantID     string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID    string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	JobID        primitive.ObjectID `bson:"job_id" json:"job_id"`
+	InventoryID  primitive.ObjectID `bson:"inventory_id,omitempty" json:"inventory_id,omitempty"`
+	Status       string             `bson:"status" json:"status"`
+	WorkerID     string             `bson:"worker_id,omitempty" json:"worker_id,omitempty"`
+	Message      string             `bson:"message,omitempty" json:"message,omitempty"`
+	ResultsCount int                `bson:"results_count,omitempty" json:"results_count,omitempty"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
 }
 
 const (

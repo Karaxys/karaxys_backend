@@ -107,6 +107,19 @@ Start the isolated Nuclei scanner worker:
 make scanner-worker
 ```
 
+Run scanner-focused tests separately from the faster backend package tests:
+
+```sh
+make test-fast
+make test-scanner-worker
+```
+
+Run the real Nuclei vulnerable-local-API integration test explicitly:
+
+```sh
+make test-scanner-integration
+```
+
 The legacy proxy/browser workflow remains available for comparison:
 
 ```sh
@@ -121,6 +134,12 @@ with a `job_id`. The API server does not import or execute Nuclei directly.
 The scanner worker claims queued jobs from MongoDB, executes Nuclei, writes
 `scan_results`, and marks the job `completed` or `failed`.
 
+Shared backend code depends on `internal/scanner.Executor`, not on the Nuclei
+SDK. The direct ProjectDiscovery/Nuclei integration is isolated in
+`cmd/scanner-worker/internal/nucleiscanner`, while `internal/scanner` owns the
+embedded template registry, template metadata, execution-target normalization,
+and deterministic template variable construction.
+
 Scanner execution is guarded by distributed Valkey/Redis coordination when
 `KARAXYS_REDIS_ADDR` is configured. `KARAXYS_SCANNER_GLOBAL_CONCURRENCY`
 limits live scanner jobs across worker replicas, while
@@ -130,6 +149,31 @@ same tenant/target. If capacity is unavailable, the worker requeues the job with
 `not_before_at` instead of failing it. Nuclei request pressure is also bounded
 per job with `KARAXYS_NUCLEI_RATE_LIMIT_PER_SECOND` and the
 `KARAXYS_NUCLEI_*_CONCURRENCY` settings.
+
+When `KARAXYS_QUEUE_ENABLED=true` or `KARAXYS_ENV=production`, scan creation
+publishes a reference event to `karaxys.scan.jobs`. MongoDB remains the scan
+source of truth; scanner workers claim jobs atomically by job ID from the queue
+event and still keep Mongo polling as a fallback for missed events or local
+development. Set `KARAXYS_SCANNER_WORKER_CONSUMER_GROUP` to control the
+scanner-worker Redpanda consumer group.
+
+Auth-based scans can use explicit role contexts:
+
+```json
+{
+  "inventory_id": "<inventory-id>",
+  "test_type": "BOLA",
+  "auth_contexts": {
+    "attacker": "Bearer attacker-token",
+    "victim": "Bearer victim-token",
+    "admin": "Bearer admin-token"
+  }
+}
+```
+
+`attacker_token` remains supported as a compatibility alias. The selected role
+credential is encrypted into `scan_secrets`; raw role credentials are not stored
+inside `scan_jobs`.
 
 Auth material supplied for auth-based scans is not stored in `scan_jobs`.
 Instead, the API server encrypts it into `scan_secrets`, stores only an
@@ -158,6 +202,16 @@ Useful endpoints:
 - `GET /scan-jobs/{id}`
 - `GET /scan-results?job_id={id}`
 - `GET /scan-results?inventory_id={id}`
+- `POST /v1/scans/{id}/rerun`
+- `GET /v1/scans/{id}/events`
+- `GET /v1/issues`
+
+Vulnerable scan results are saved as redacted `scan_results` evidence and
+deduplicated into `issues` by tenant, endpoint, and test type. Scan progress is
+stored in Redis/Valkey for short-lived status reads and in MongoDB
+`scan_progress_events` for a durable timeline. Scan config construction uses
+the latest redacted `traffic_samples` entry for the endpoint when available,
+falling back to inventory samples.
 
 Normal backend API endpoints require either:
 
