@@ -25,6 +25,13 @@ func NewScanner() *Scanner {
 }
 
 func (s *Scanner) ExecuteScan(config core.ScanConfig) ([]core.ScanExecutionResult, error) {
+	return s.ExecuteScanContext(context.Background(), config)
+}
+
+func (s *Scanner) ExecuteScanContext(ctx context.Context, config core.ScanConfig) ([]core.ScanExecutionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	log.Printf("Starting %s Scan on %s %s", config.TestType, config.Method, config.Path)
 	yamlContent, err := GetTemplate(config.TestType)
 	if err != nil {
@@ -53,11 +60,24 @@ func (s *Scanner) ExecuteScan(config core.ScanConfig) ([]core.ScanExecutionResul
 		log.Printf("Could not prepare nuclei ignore file: %v", err)
 	}
 
-	ne, err := nuclei.NewThreadSafeNucleiEngineCtx(
-		context.Background(),
+	engineOptions := []nuclei.NucleiSDKOptions{
 		nuclei.DisableUpdateCheck(),
 		nuclei.EnableMatcherStatus(),
-	)
+	}
+	if config.RateLimitPerSecond > 0 {
+		engineOptions = append(engineOptions, nuclei.WithGlobalRateLimitCtx(ctx, config.RateLimitPerSecond, time.Second))
+	}
+	if hasConcurrencyLimits(config) {
+		engineOptions = append(engineOptions, nuclei.WithConcurrency(nuclei.Concurrency{
+			TemplateConcurrency:         positiveOrDefault(config.TemplateConcurrency, 1),
+			HostConcurrency:             positiveOrDefault(config.HostConcurrency, 1),
+			HeadlessHostConcurrency:     positiveOrDefault(config.HostConcurrency, 1),
+			HeadlessTemplateConcurrency: positiveOrDefault(config.TemplateConcurrency, 1),
+			TemplatePayloadConcurrency:  positiveOrDefault(config.PayloadConcurrency, 1),
+			ProbeConcurrency:            positiveOrDefault(config.ProbeConcurrency, 1),
+		}))
+	}
+	ne, err := nuclei.NewThreadSafeNucleiEngineCtx(ctx, engineOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init nuclei engine: %v", err)
 	}
@@ -165,6 +185,20 @@ func (s *Scanner) ExecuteScan(config core.ScanConfig) ([]core.ScanExecutionResul
 	}
 
 	return results, nil
+}
+
+func hasConcurrencyLimits(config core.ScanConfig) bool {
+	return config.TemplateConcurrency > 0 ||
+		config.HostConcurrency > 0 ||
+		config.PayloadConcurrency > 0 ||
+		config.ProbeConcurrency > 0
+}
+
+func positiveOrDefault(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func ensureNucleiIgnoreFile() error {

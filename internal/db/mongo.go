@@ -31,6 +31,7 @@ type DB struct {
 	ScanJobs             *mongo.Collection
 	ScanResults          *mongo.Collection
 	ScanSecrets          *mongo.Collection
+	Issues               *mongo.Collection
 	AuditLogs            *mongo.Collection
 	Accounts             *mongo.Collection
 	AccountSettings      *mongo.Collection
@@ -101,6 +102,7 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		ScanJobs:             mongoDB.Collection("scan_jobs"),
 		ScanResults:          mongoDB.Collection("scan_results"),
 		ScanSecrets:          mongoDB.Collection("scan_secrets"),
+		Issues:               mongoDB.Collection("issues"),
 		AuditLogs:            mongoDB.Collection("audit_logs"),
 		Accounts:             mongoDB.Collection("accounts"),
 		AccountSettings:      mongoDB.Collection("account_settings"),
@@ -249,6 +251,14 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetName("scan_jobs_status_created_at"),
 		},
 		{
+			Keys:    bson.D{{Key: "status", Value: 1}, {Key: "deadline_at", Value: 1}},
+			Options: options.Index().SetName("scan_jobs_status_deadline_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "status", Value: 1}, {Key: "not_before_at", Value: 1}, {Key: "created_at", Value: 1}},
+			Options: options.Index().SetName("scan_jobs_status_not_before_created_at"),
+		},
+		{
 			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_jobs_inventory_created_at"),
 		},
@@ -285,6 +295,23 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("scan_results_tenant_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	if err := createIndexes(ctx, "issues", db.Issues, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "issue_fingerprint", Value: 1}},
+			Options: options.Index().SetName("issues_issue_fingerprint_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "status", Value: 1}, {Key: "severity", Value: 1}, {Key: "updated_at", Value: -1}},
+			Options: options.Index().SetName("issues_tenant_status_severity_updated_at"),
+		},
+		{
+			Keys:    bson.D{{Key: "inventory_id", Value: 1}, {Key: "updated_at", Value: -1}},
+			Options: options.Index().SetName("issues_inventory_updated_at"),
 		},
 	}); err != nil {
 		return err

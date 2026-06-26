@@ -14,6 +14,9 @@ func TestRedisKeysAreScopedAndSanitized(t *testing.T) {
 	if got := ScanProgressKey("karaxys:test", "job:1"); got != "karaxys_test:scan_progress:job_1" {
 		t.Fatalf("unexpected progress key: %s", got)
 	}
+	if got := ScannerGlobalSemaphoreKey(); got != "scanner:global" {
+		t.Fatalf("unexpected scanner semaphore key: %s", got)
+	}
 	key := hashedKey("karaxys", "rate_limit", "subject:user-1")
 	if !strings.HasPrefix(key, "karaxys:rate_limit:") {
 		t.Fatalf("unexpected hashed key prefix: %s", key)
@@ -37,6 +40,15 @@ func TestNoopRedisImplementationsAllowLocalDevelopment(t *testing.T) {
 	}
 	if err := lock.Release(context.Background()); err != nil {
 		t.Fatalf("noop release: %v", err)
+	}
+
+	semaphore := NewRedisSemaphore(nil, "karaxys")
+	semLock, acquired, err := semaphore.TryAcquire(context.Background(), "scanner", "worker", 1, time.Second)
+	if err != nil || !acquired {
+		t.Fatalf("nil redis semaphore should acquire noop lock, acquired=%v err=%v", acquired, err)
+	}
+	if err := semLock.Release(context.Background()); err != nil {
+		t.Fatalf("noop semaphore release: %v", err)
 	}
 
 	progress := NewRedisScanProgressCache(nil, "karaxys")

@@ -102,6 +102,24 @@ func ValidateProductionEnvironment(service string) error {
 			problems = append(problems, "KARAXYS_SECRET_KEY_B64 must decode to exactly 32 bytes")
 		}
 	}
+	if service == ServiceScannerWorker {
+		for _, key := range []string{
+			"KARAXYS_SCANNER_GLOBAL_CONCURRENCY",
+			"KARAXYS_SCANNER_TARGET_JOBS_PER_WINDOW",
+			"KARAXYS_SCANNER_TARGET_RATE_WINDOW_SECONDS",
+			"KARAXYS_SCANNER_CAPACITY_RETRY_SECONDS",
+			"KARAXYS_SCANNER_ADMISSION_LEASE_SECONDS",
+			"KARAXYS_NUCLEI_RATE_LIMIT_PER_SECOND",
+			"KARAXYS_NUCLEI_TEMPLATE_CONCURRENCY",
+			"KARAXYS_NUCLEI_HOST_CONCURRENCY",
+			"KARAXYS_NUCLEI_PAYLOAD_CONCURRENCY",
+			"KARAXYS_NUCLEI_PROBE_CONCURRENCY",
+		} {
+			if !positiveOptionalIntEnv(key) {
+				problems = append(problems, key+" must be a positive integer when set")
+			}
+		}
+	}
 
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid production environment for %s: %s", service, strings.Join(problems, ", "))
@@ -134,6 +152,15 @@ func isValidAPIKeyRole(value string) bool {
 	default:
 		return false
 	}
+}
+
+func positiveOptionalIntEnv(key string) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return true
+	}
+	value, err := strconv.Atoi(raw)
+	return err == nil && value > 0
 }
 
 func LoadDatabaseConfig() (*DatabaseConfig, error) {

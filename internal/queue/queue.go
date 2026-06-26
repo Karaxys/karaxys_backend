@@ -13,6 +13,7 @@ const (
 	TopicHTTPConversations = "karaxys.http.conversations"
 	TopicAnalyzerJobs      = "karaxys.analyzer.jobs"
 	TopicIngestDeadLetter  = "karaxys.ingest.dead_letter"
+	TopicScanJobs          = "karaxys.scan.jobs"
 
 	HeaderSchemaVersion  = "schema_version"
 	HeaderTenantID       = "tenant_id"
@@ -36,6 +37,7 @@ var DefaultTopics = []string{
 	TopicHTTPConversations,
 	TopicAnalyzerJobs,
 	TopicIngestDeadLetter,
+	TopicScanJobs,
 }
 
 var ErrNoMessage = errors.New("queue has no available message")

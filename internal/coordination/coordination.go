@@ -32,6 +32,10 @@ type Locker interface {
 	TryLock(ctx context.Context, key string, value string, ttl time.Duration) (DistributedLock, bool, error)
 }
 
+type Semaphore interface {
+	TryAcquire(ctx context.Context, key string, value string, limit int, ttl time.Duration) (DistributedLock, bool, error)
+}
+
 type ScanProgressCache interface {
 	Set(ctx context.Context, progress ScanProgress, ttl time.Duration) error
 	Delete(ctx context.Context, jobID string) error
@@ -59,6 +63,7 @@ type RedisRuntime struct {
 	Client      *redis.Client
 	RateLimiter RateLimiter
 	Locker      Locker
+	Semaphore   Semaphore
 	Progress    ScanProgressCache
 	KeyPrefix   string
 	ProgressTTL time.Duration
@@ -87,6 +92,7 @@ func NewRedisRuntimeFromEnv() (*RedisRuntime, error) {
 		Client:      client,
 		RateLimiter: NewRedisRateLimiter(client, prefix),
 		Locker:      NewRedisLocker(client, prefix),
+		Semaphore:   NewRedisSemaphore(client, prefix),
 		Progress:    NewRedisScanProgressCache(client, prefix),
 		KeyPrefix:   prefix,
 		ProgressTTL: progressTTL,
@@ -209,6 +215,43 @@ type noopLock struct{}
 
 func (noopLock) Release(context.Context) error { return nil }
 
+type RedisSemaphore struct {
+	client *redis.Client
+	prefix string
+}
+
+func NewRedisSemaphore(client *redis.Client, prefix string) *RedisSemaphore {
+	return &RedisSemaphore{client: client, prefix: normalizedPrefix(prefix)}
+}
+
+func (s *RedisSemaphore) TryAcquire(ctx context.Context, key string, value string, limit int, ttl time.Duration) (DistributedLock, bool, error) {
+	if s == nil || s.client == nil {
+		return noopLock{}, true, nil
+	}
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return nil, false, fmt.Errorf("semaphore key and value are required")
+	}
+	if limit <= 0 {
+		return nil, false, fmt.Errorf("semaphore limit must be positive")
+	}
+	if ttl <= 0 {
+		return nil, false, fmt.Errorf("semaphore ttl must be positive")
+	}
+	for slot := 0; slot < limit; slot++ {
+		redisKey := plainKey(s.prefix, "semaphore", key, strconv.Itoa(slot))
+		ok, err := s.client.SetNX(ctx, redisKey, value, ttl).Result()
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return &redisLock{client: s.client, key: redisKey, value: value}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 type RedisScanProgressCache struct {
 	client *redis.Client
 	prefix string
@@ -252,6 +295,10 @@ func (c *RedisScanProgressCache) Delete(ctx context.Context, jobID string) error
 
 func ScanJobLockKey(jobID string) string {
 	return "scan_job:" + strings.TrimSpace(jobID)
+}
+
+func ScannerGlobalSemaphoreKey() string {
+	return "scanner:global"
 }
 
 func ScanProgressKey(prefix string, jobID string) string {

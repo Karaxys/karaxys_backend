@@ -424,19 +424,31 @@ const (
 	ScanJobStatusRunning   = "running"
 	ScanJobStatusCompleted = "completed"
 	ScanJobStatusFailed    = "failed"
+	ScanJobStatusCancelled = "cancelled"
+	ScanJobStatusTimedOut  = "timed_out"
+)
+
+const (
+	DefaultScanTimeoutSeconds = 120
+	MaxScanTimeoutSeconds     = 3600
 )
 
 type ScanConfig struct {
-	TargetURL     string            `bson:"target_url" json:"target_url"`
-	Method        string            `bson:"method" json:"method"`
-	Path          string            `bson:"path" json:"path"`
-	Body          string            `bson:"body,omitempty" json:"body,omitempty"`
-	Headers       map[string]string `bson:"headers,omitempty" json:"headers,omitempty"`
-	TestType      string            `bson:"test_type" json:"test_type"`
-	AuthSecretRef string            `bson:"auth_secret_ref,omitempty" json:"auth_secret_ref,omitempty"`
-	ManualAuth    string            `bson:"-" json:"-"`
-	AttackMethod  string            `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
-	PollutedBody  string            `bson:"polluted_body,omitempty" json:"polluted_body,omitempty"`
+	TargetURL           string            `bson:"target_url" json:"target_url"`
+	Method              string            `bson:"method" json:"method"`
+	Path                string            `bson:"path" json:"path"`
+	Body                string            `bson:"body,omitempty" json:"body,omitempty"`
+	Headers             map[string]string `bson:"headers,omitempty" json:"headers,omitempty"`
+	TestType            string            `bson:"test_type" json:"test_type"`
+	AuthSecretRef       string            `bson:"auth_secret_ref,omitempty" json:"auth_secret_ref,omitempty"`
+	ManualAuth          string            `bson:"-" json:"-"`
+	AttackMethod        string            `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
+	PollutedBody        string            `bson:"polluted_body,omitempty" json:"polluted_body,omitempty"`
+	RateLimitPerSecond  int               `bson:"rate_limit_per_second,omitempty" json:"rate_limit_per_second,omitempty"`
+	TemplateConcurrency int               `bson:"template_concurrency,omitempty" json:"template_concurrency,omitempty"`
+	HostConcurrency     int               `bson:"host_concurrency,omitempty" json:"host_concurrency,omitempty"`
+	PayloadConcurrency  int               `bson:"payload_concurrency,omitempty" json:"payload_concurrency,omitempty"`
+	ProbeConcurrency    int               `bson:"probe_concurrency,omitempty" json:"probe_concurrency,omitempty"`
 }
 
 type ScanExecutionResult struct {
@@ -453,20 +465,53 @@ type ScanExecutionResult struct {
 }
 
 type ScanJob struct {
-	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	TenantID     string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
-	ProjectID    string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
-	InventoryID  primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
-	Status       string             `bson:"status" json:"status"`
-	TestType     string             `bson:"test_type" json:"test_type"`
-	AttackMethod string             `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
-	Config       ScanConfig         `bson:"config" json:"config"`
-	Error        string             `bson:"error,omitempty" json:"error,omitempty"`
-	WorkerID     string             `bson:"worker_id,omitempty" json:"worker_id,omitempty"`
-	Attempts     int                `bson:"attempts" json:"attempts"`
-	ResultsCount int                `bson:"results_count" json:"results_count"`
-	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt    time.Time          `bson:"updated_at" json:"updated_at"`
-	StartedAt    time.Time          `bson:"started_at,omitempty" json:"started_at,omitempty"`
-	CompletedAt  time.Time          `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	TenantID          string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID         string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	InventoryID       primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
+	Status            string             `bson:"status" json:"status"`
+	TestType          string             `bson:"test_type" json:"test_type"`
+	AttackMethod      string             `bson:"attack_method,omitempty" json:"attack_method,omitempty"`
+	Config            ScanConfig         `bson:"config" json:"config"`
+	Error             string             `bson:"error,omitempty" json:"error,omitempty"`
+	WorkerID          string             `bson:"worker_id,omitempty" json:"worker_id,omitempty"`
+	Attempts          int                `bson:"attempts" json:"attempts"`
+	ResultsCount      int                `bson:"results_count" json:"results_count"`
+	TimeoutSeconds    int                `bson:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
+	StartedAt         time.Time          `bson:"started_at,omitempty" json:"started_at,omitempty"`
+	DeadlineAt        time.Time          `bson:"deadline_at,omitempty" json:"deadline_at,omitempty"`
+	NotBeforeAt       time.Time          `bson:"not_before_at,omitempty" json:"not_before_at,omitempty"`
+	CompletedAt       time.Time          `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
+	CancelRequestedAt time.Time          `bson:"cancel_requested_at,omitempty" json:"cancel_requested_at,omitempty"`
+	CancelledAt       time.Time          `bson:"cancelled_at,omitempty" json:"cancelled_at,omitempty"`
+}
+
+const (
+	IssueStatusOpen          = "open"
+	IssueStatusAcceptedRisk  = "accepted_risk"
+	IssueStatusFalsePositive = "false_positive"
+	IssueStatusFixed         = "fixed"
+)
+
+type Issue struct {
+	ID                  primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	TenantID            string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ProjectID           string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
+	InventoryID         primitive.ObjectID `bson:"inventory_id,omitempty" json:"inventory_id,omitempty"`
+	EndpointFingerprint string             `bson:"endpoint_fingerprint,omitempty" json:"endpoint_fingerprint,omitempty"`
+	ScanJobID           primitive.ObjectID `bson:"scan_job_id,omitempty" json:"scan_job_id,omitempty"`
+	ScanResultID        primitive.ObjectID `bson:"scan_result_id,omitempty" json:"scan_result_id,omitempty"`
+	IssueFingerprint    string             `bson:"issue_fingerprint" json:"issue_fingerprint"`
+	TestType            string             `bson:"test_type" json:"test_type"`
+	Severity            string             `bson:"severity" json:"severity"`
+	Status              string             `bson:"status" json:"status"`
+	Title               string             `bson:"title" json:"title"`
+	Description         string             `bson:"description,omitempty" json:"description,omitempty"`
+	EvidenceSummary     string             `bson:"evidence_summary,omitempty" json:"evidence_summary,omitempty"`
+	FirstSeenAt         time.Time          `bson:"first_seen_at" json:"first_seen_at"`
+	LastSeenAt          time.Time          `bson:"last_seen_at" json:"last_seen_at"`
+	CreatedAt           time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt           time.Time          `bson:"updated_at" json:"updated_at"`
 }

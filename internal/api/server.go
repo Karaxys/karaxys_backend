@@ -12,7 +12,9 @@ import (
 	"karaxys_backend/internal/db"
 	"karaxys_backend/internal/ingest"
 	"karaxys_backend/internal/queue"
+	"karaxys_backend/internal/scancontrol"
 	"karaxys_backend/internal/scanplan"
+	"karaxys_backend/internal/scanpolicy"
 	"karaxys_backend/internal/security/scansecrets"
 	"log"
 	"net/http"
@@ -82,6 +84,9 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
 	mux.HandleFunc("GET /scan-jobs/{id}", s.handleGetScanJob)
 	mux.HandleFunc("GET /scan-results", s.handleGetScanResults)
+	mux.HandleFunc("POST /v1/scans", s.handleTriggerScan)
+	mux.HandleFunc("GET /v1/scans/{id}", s.handleGetScanJob)
+	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.handleCancelScanJob)
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
 
@@ -268,19 +273,25 @@ func (s *Server) handleGetInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 type ScanRequest struct {
-	InventoryID   string `json:"inventory_id"`
-	TestType      string `json:"test_type"`
-	AttackerToken string `json:"attacker_token"`
-	AttackMethod  string `json:"attack_method"`
+	InventoryID    string `json:"inventory_id"`
+	TestType       string `json:"test_type"`
+	AttackerToken  string `json:"attacker_token"`
+	AttackMethod   string `json:"attack_method"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 type ScanJobResponse struct {
-	JobID        string `json:"job_id"`
-	Status       string `json:"status"`
-	InventoryID  string `json:"inventory_id"`
-	TestType     string `json:"test_type"`
-	Error        string `json:"error,omitempty"`
-	ResultsCount int    `json:"results_count,omitempty"`
+	JobID          string `json:"job_id"`
+	Status         string `json:"status"`
+	InventoryID    string `json:"inventory_id"`
+	TestType       string `json:"test_type"`
+	Error          string `json:"error,omitempty"`
+	ResultsCount   int    `json:"results_count,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	StartedAt      string `json:"started_at,omitempty"`
+	DeadlineAt     string `json:"deadline_at,omitempty"`
+	CompletedAt    string `json:"completed_at,omitempty"`
 }
 
 func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +339,18 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Target BaseURL missing in inventory. Re-capture traffic.", 400)
 		return
 	}
+	if err := scanpolicy.LoadTargetPolicyFromEnv().ValidateTargetURL(r.Context(), target.BaseURL); err != nil {
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "target blocked by scan policy")
+		http.Error(w, "Target blocked by scan policy: "+err.Error(), scanPolicyHTTPStatus(err))
+		return
+	}
+
+	timeoutSeconds, err := normalizeScanTimeout(req.TimeoutSeconds)
+	if err != nil {
+		s.auditScanCreate(r, "", req, core.AuditStatusFailure, "invalid scan timeout")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	config, err := scanplan.BuildScanConfig(
 		target.BaseURL,
@@ -341,6 +364,7 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Config Error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	config = scancontrol.ApplyExecutionLimits(config, scancontrol.LoadConfigFromEnv())
 
 	jobID := primitive.NewObjectID()
 	if err := s.externalizeScanAuthSecret(jobID, &config); err != nil {
@@ -354,14 +378,15 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job, err := s.DB.CreateScanJob(core.ScanJob{
-		ID:           jobID,
-		TenantID:     target.TenantID,
-		ProjectID:    target.ProjectID,
-		InventoryID:  target.ID,
-		Status:       core.ScanJobStatusQueued,
-		TestType:     req.TestType,
-		AttackMethod: req.AttackMethod,
-		Config:       config,
+		ID:             jobID,
+		TenantID:       target.TenantID,
+		ProjectID:      target.ProjectID,
+		InventoryID:    target.ID,
+		Status:         core.ScanJobStatusQueued,
+		TestType:       req.TestType,
+		AttackMethod:   req.AttackMethod,
+		Config:         config,
+		TimeoutSeconds: timeoutSeconds,
 	})
 	if err != nil {
 		if config.AuthSecretRef != "" {
@@ -378,12 +403,33 @@ func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(ScanJobResponse{
-		JobID:        job.ID.Hex(),
-		Status:       job.Status,
-		InventoryID:  target.ID.Hex(),
-		TestType:     job.TestType,
-		ResultsCount: job.ResultsCount,
+		JobID:          job.ID.Hex(),
+		Status:         job.Status,
+		InventoryID:    target.ID.Hex(),
+		TestType:       job.TestType,
+		ResultsCount:   job.ResultsCount,
+		TimeoutSeconds: job.TimeoutSeconds,
+		CreatedAt:      formatOptionalTime(job.CreatedAt),
 	})
+}
+
+func normalizeScanTimeout(timeoutSeconds int) (int, error) {
+	if timeoutSeconds == 0 {
+		return core.DefaultScanTimeoutSeconds, nil
+	}
+	if timeoutSeconds < 1 || timeoutSeconds > core.MaxScanTimeoutSeconds {
+		return 0, fmt.Errorf("timeout_seconds must be between 1 and %d", core.MaxScanTimeoutSeconds)
+	}
+	return timeoutSeconds, nil
+}
+
+func scanPolicyHTTPStatus(err error) int {
+	switch {
+	case errors.Is(err, scanpolicy.ErrTargetDenied), errors.Is(err, scanpolicy.ErrTargetNotAllowed), errors.Is(err, scanpolicy.ErrTargetPrivateNetwork), errors.Is(err, scanpolicy.ErrTargetMetadata):
+		return http.StatusForbidden
+	default:
+		return http.StatusBadRequest
+	}
 }
 
 func (s *Server) auditScanCreate(r *http.Request, jobID string, req ScanRequest, status string, message string) {
@@ -486,13 +532,75 @@ func (s *Server) handleGetScanJob(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ScanJobResponse{
-		JobID:        job.ID.Hex(),
-		Status:       job.Status,
-		InventoryID:  job.InventoryID.Hex(),
-		TestType:     job.TestType,
-		Error:        job.Error,
-		ResultsCount: job.ResultsCount,
+		JobID:          job.ID.Hex(),
+		Status:         job.Status,
+		InventoryID:    job.InventoryID.Hex(),
+		TestType:       job.TestType,
+		Error:          job.Error,
+		ResultsCount:   job.ResultsCount,
+		TimeoutSeconds: job.TimeoutSeconds,
+		CreatedAt:      formatOptionalTime(job.CreatedAt),
+		StartedAt:      formatOptionalTime(job.StartedAt),
+		DeadlineAt:     formatOptionalTime(job.DeadlineAt),
+		CompletedAt:    formatOptionalTime(job.CompletedAt),
 	})
+}
+
+func (s *Server) handleCancelScanJob(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, scanRoles...)
+	if !ok {
+		return
+	}
+	idStr := r.PathValue("id")
+	objID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		http.Error(w, "Invalid scan job ID", http.StatusBadRequest)
+		return
+	}
+	tenantID := ""
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		tenantID = principal.AccountID
+	}
+	job, err := s.DB.CancelScanJob(objID, tenantID)
+	if err != nil {
+		if errors.Is(err, db.ErrScanJobNotCancellable) {
+			http.Error(w, "Scan job is already terminal", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Scan Job Not Found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, scanJobResponse(job))
+}
+
+func scanJobResponse(job *core.ScanJob) ScanJobResponse {
+	if job == nil {
+		return ScanJobResponse{}
+	}
+	return ScanJobResponse{
+		JobID:          job.ID.Hex(),
+		Status:         job.Status,
+		InventoryID:    job.InventoryID.Hex(),
+		TestType:       job.TestType,
+		Error:          job.Error,
+		ResultsCount:   job.ResultsCount,
+		TimeoutSeconds: job.TimeoutSeconds,
+		CreatedAt:      formatOptionalTime(job.CreatedAt),
+		StartedAt:      formatOptionalTime(job.StartedAt),
+		DeadlineAt:     formatOptionalTime(job.DeadlineAt),
+		CompletedAt:    formatOptionalTime(job.CompletedAt),
+	}
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {

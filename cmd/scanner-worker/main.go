@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"karaxys_backend/internal/config"
 	"karaxys_backend/internal/coordination"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/db"
+	"karaxys_backend/internal/scancontrol"
 	"karaxys_backend/internal/scanner"
 	"karaxys_backend/internal/security/scansecrets"
 	"log"
@@ -52,6 +54,18 @@ func main() {
 		defer redisRuntime.Close()
 		log.Printf("Redis/Valkey scanner coordination enabled prefix=%s", redisRuntime.KeyPrefix)
 	}
+	scanLimits := scancontrol.LoadConfigFromEnv().Normalize()
+	log.Printf("Scanner limits global_concurrency=%d target_jobs_per_window=%d target_rate_window=%s capacity_retry_delay=%s nuclei_rate_limit_per_second=%d template_concurrency=%d host_concurrency=%d payload_concurrency=%d probe_concurrency=%d",
+		scanLimits.GlobalConcurrency,
+		scanLimits.TargetJobsPerWindow,
+		scanLimits.TargetRateWindow,
+		scanLimits.CapacityRetryDelay,
+		scanLimits.NucleiRateLimitPerSecond,
+		scanLimits.NucleiTemplateConcurrency,
+		scanLimits.NucleiHostConcurrency,
+		scanLimits.NucleiPayloadConcurrency,
+		scanLimits.NucleiProbeConcurrency,
+	)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(stop)
@@ -65,7 +79,7 @@ func main() {
 		default:
 		}
 
-		processed, err := processOne(database, engine, *workerID, redisRuntime)
+		processed, err := processOne(database, engine, *workerID, redisRuntime, scanLimits)
 		if err != nil {
 			log.Printf("Scanner worker error: %v", err)
 		}
@@ -78,27 +92,27 @@ func main() {
 	}
 }
 
-func processOne(database *db.DB, engine *scanner.Scanner, workerID string, redisRuntime *coordination.RedisRuntime) (bool, error) {
+func processOne(database *db.DB, engine *scanner.Scanner, workerID string, redisRuntime *coordination.RedisRuntime, scanLimits scancontrol.Config) (bool, error) {
 	job, err := database.ClaimNextScanJob(workerID)
 	if err != nil || job == nil {
 		return false, err
 	}
 
 	log.Printf("Claimed scan job id=%s test=%s inventory=%s", job.ID.Hex(), job.TestType, job.InventoryID.Hex())
-	defer cleanupScanSecret(database, job.Config.AuthSecretRef)
 	var lock coordination.DistributedLock
 	if redisRuntime != nil && redisRuntime.Locker != nil {
 		lockValue := workerID + ":" + primitive.NewObjectID().Hex()
 		acquiredLock, acquired, lockErr := redisRuntime.Locker.TryLock(context.Background(), coordination.ScanJobLockKey(job.ID.Hex()), lockValue, redisRuntime.ScanLockTTL)
 		if lockErr != nil {
-			_ = database.FailScanJob(job.ID, "scan coordination lock failed: "+lockErr.Error())
-			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, "scan coordination lock failed", 0)
+			message := "scan coordination lock unavailable"
+			_ = database.RequeueScanJob(job.ID, message+": "+lockErr.Error(), scanLimits.CapacityRetryDelay)
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusQueued, workerID, message, 0)
 			return true, lockErr
 		}
 		if !acquired {
 			message := "scan coordination lock already held"
-			_ = database.FailScanJob(job.ID, message)
-			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, message, 0)
+			_ = database.RequeueScanJob(job.ID, message, scanLimits.CapacityRetryDelay)
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusQueued, workerID, message, 0)
 			return true, nil
 		}
 		lock = acquiredLock
@@ -108,23 +122,81 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string, redis
 			}
 		}()
 	}
-	setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusRunning, workerID, "", 0)
 
 	config := job.Config
+	cancelled, err := scanJobCancelled(database, job.ID)
+	if err != nil {
+		return true, err
+	}
+	if cancelled {
+		cleanupScanSecret(database, job.Config.AuthSecretRef)
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusCancelled, workerID, "scan cancelled", 0)
+		return true, nil
+	}
+	admission, admitted, admissionMessage, retryDelay, err := acquireScanAdmission(redisRuntime, *job, workerID, scanLimits)
+	if err != nil {
+		if admissionMessage == "invalid scan target" {
+			_ = database.FailScanJob(job.ID, admissionMessage+": "+err.Error())
+			cleanupScanSecret(database, job.Config.AuthSecretRef)
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, admissionMessage, 0)
+			return true, err
+		}
+		_ = database.RequeueScanJob(job.ID, admissionMessage+": "+err.Error(), retryDelay)
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusQueued, workerID, admissionMessage, 0)
+		return true, err
+	}
+	if !admitted {
+		_ = database.RequeueScanJob(job.ID, admissionMessage, retryDelay)
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusQueued, workerID, admissionMessage, 0)
+		return true, nil
+	}
+	defer admission.Release()
+	setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusRunning, workerID, "", 0)
+
 	if err := hydrateScanAuthSecret(database, &config); err != nil {
+		_ = database.FailScanJob(job.ID, err.Error())
+		cleanupScanSecret(database, job.Config.AuthSecretRef)
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), 0)
+		return true, err
+	}
+	defer cleanupScanSecret(database, job.Config.AuthSecretRef)
+
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(core.DefaultScanTimeoutSeconds) * time.Second
+	}
+	scanCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	results, err := engine.ExecuteScanContext(scanCtx, config)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(scanCtx.Err(), context.DeadlineExceeded) {
+			message := "scan timed out"
+			_ = database.TimeoutScanJob(job.ID, message)
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusTimedOut, workerID, message, 0)
+			return true, err
+		}
 		_ = database.FailScanJob(job.ID, err.Error())
 		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), 0)
 		return true, err
 	}
-
-	results, err := engine.ExecuteScan(config)
+	cancelled, err = scanJobCancelled(database, job.ID)
 	if err != nil {
-		_ = database.FailScanJob(job.ID, err.Error())
-		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusFailed, workerID, err.Error(), 0)
 		return true, err
+	}
+	if cancelled {
+		setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusCancelled, workerID, "scan cancelled", 0)
+		return true, nil
 	}
 
 	for _, res := range results {
+		cancelled, err = scanJobCancelled(database, job.ID)
+		if err != nil {
+			return true, err
+		}
+		if cancelled {
+			setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusCancelled, workerID, "scan cancelled", 0)
+			return true, nil
+		}
 		if err := database.SaveScanResult(core.ScanResult{
 			TenantID:       job.TenantID,
 			ProjectID:      job.ProjectID,
@@ -153,6 +225,65 @@ func processOne(database *db.DB, engine *scanner.Scanner, workerID string, redis
 	setScanProgress(redisRuntime, job.ID.Hex(), core.ScanJobStatusCompleted, workerID, "", len(results))
 	log.Printf("Completed scan job id=%s results=%d", job.ID.Hex(), len(results))
 	return true, nil
+}
+
+type scanAdmission struct {
+	locks []coordination.DistributedLock
+}
+
+func (a *scanAdmission) Release() {
+	if a == nil {
+		return
+	}
+	for i := len(a.locks) - 1; i >= 0; i-- {
+		if err := a.locks[i].Release(context.Background()); err != nil {
+			log.Printf("Failed to release scanner admission lock: %v", err)
+		}
+	}
+}
+
+func acquireScanAdmission(redisRuntime *coordination.RedisRuntime, job core.ScanJob, workerID string, limits scancontrol.Config) (*scanAdmission, bool, string, time.Duration, error) {
+	limits = limits.Normalize()
+	admission := &scanAdmission{}
+	if redisRuntime == nil {
+		return admission, true, "", 0, nil
+	}
+	value := workerID + ":" + job.ID.Hex() + ":" + primitive.NewObjectID().Hex()
+	if redisRuntime.Semaphore != nil {
+		lock, acquired, err := redisRuntime.Semaphore.TryAcquire(context.Background(), coordination.ScannerGlobalSemaphoreKey(), value, limits.GlobalConcurrency, limits.AdmissionLease)
+		if err != nil {
+			return admission, false, "scanner global concurrency unavailable", limits.CapacityRetryDelay, err
+		}
+		if !acquired {
+			return admission, false, "scanner global concurrency limit reached", limits.CapacityRetryDelay, nil
+		}
+		admission.locks = append(admission.locks, lock)
+	}
+	if limits.TargetJobsPerWindow > 0 && redisRuntime.RateLimiter != nil {
+		targetKey, err := scancontrol.TargetRateKey(job)
+		if err != nil {
+			admission.Release()
+			return admission, false, "invalid scan target", 0, err
+		}
+		allowed, err := redisRuntime.RateLimiter.Allow(context.Background(), targetKey, limits.TargetJobsPerWindow, limits.TargetRateWindow)
+		if err != nil {
+			admission.Release()
+			return admission, false, "scanner target rate limiter unavailable", limits.CapacityRetryDelay, err
+		}
+		if !allowed {
+			admission.Release()
+			return admission, false, "scanner target rate limit reached", limits.TargetRateWindow, nil
+		}
+	}
+	return admission, true, "", 0, nil
+}
+
+func scanJobCancelled(database *db.DB, jobID primitive.ObjectID) (bool, error) {
+	job, err := database.GetScanJob(jobID)
+	if err != nil {
+		return false, err
+	}
+	return job.Status == core.ScanJobStatusCancelled, nil
 }
 
 func setScanProgress(redisRuntime *coordination.RedisRuntime, jobID string, status string, workerID string, message string, resultsCount int) {

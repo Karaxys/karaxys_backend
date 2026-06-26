@@ -121,6 +121,16 @@ with a `job_id`. The API server does not import or execute Nuclei directly.
 The scanner worker claims queued jobs from MongoDB, executes Nuclei, writes
 `scan_results`, and marks the job `completed` or `failed`.
 
+Scanner execution is guarded by distributed Valkey/Redis coordination when
+`KARAXYS_REDIS_ADDR` is configured. `KARAXYS_SCANNER_GLOBAL_CONCURRENCY`
+limits live scanner jobs across worker replicas, while
+`KARAXYS_SCANNER_TARGET_JOBS_PER_WINDOW` and
+`KARAXYS_SCANNER_TARGET_RATE_WINDOW_SECONDS` throttle repeated jobs against the
+same tenant/target. If capacity is unavailable, the worker requeues the job with
+`not_before_at` instead of failing it. Nuclei request pressure is also bounded
+per job with `KARAXYS_NUCLEI_RATE_LIMIT_PER_SECOND` and the
+`KARAXYS_NUCLEI_*_CONCURRENCY` settings.
+
 Auth material supplied for auth-based scans is not stored in `scan_jobs`.
 Instead, the API server encrypts it into `scan_secrets`, stores only an
 `auth_secret_ref` on the scan job, and the scanner worker decrypts it after
@@ -225,7 +235,7 @@ normalized path pattern:
 ```
 
 Redis/Valkey-backed coordination is available for distributed HTTP rate limits,
-scanner job locks, and short-lived scan progress cache. If
+scanner job locks, scanner admission control, and short-lived scan progress cache. If
 `KARAXYS_REDIS_ADDR` is unset, local development falls back to the in-process
 limiter and Mongo scan-job claim path.
 

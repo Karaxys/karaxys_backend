@@ -31,6 +31,8 @@ type PaginatedResponse struct {
 	TotalPages int         `json:"total_pages"`
 }
 
+var ErrScanJobNotCancellable = errors.New("scan job is not cancellable")
+
 func (db *DB) SaveLog(logEntry core.TrafficLog) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -173,6 +175,9 @@ func (db *DB) CreateScanJob(job core.ScanJob) (core.ScanJob, error) {
 	if job.Status == "" {
 		job.Status = core.ScanJobStatusQueued
 	}
+	if job.TimeoutSeconds <= 0 {
+		job.TimeoutSeconds = core.DefaultScanTimeoutSeconds
+	}
 	if job.CreatedAt.IsZero() {
 		job.CreatedAt = now
 	}
@@ -198,6 +203,13 @@ func (db *DB) ClaimNextScanJob(workerID string) (*core.ScanJob, error) {
 	opts := options.FindOneAndUpdate().
 		SetSort(bson.D{{Key: "created_at", Value: 1}}).
 		SetReturnDocument(options.After)
+	filter := bson.M{
+		"status": core.ScanJobStatusQueued,
+		"$or": []bson.M{
+			{"not_before_at": bson.M{"$exists": false}},
+			{"not_before_at": bson.M{"$lte": now}},
+		},
+	}
 	update := bson.M{
 		"$set": bson.M{
 			"status":     core.ScanJobStatusRunning,
@@ -210,10 +222,22 @@ func (db *DB) ClaimNextScanJob(workerID string) (*core.ScanJob, error) {
 	}
 
 	var job core.ScanJob
-	err := db.ScanJobs.FindOneAndUpdate(ctx, bson.M{"status": core.ScanJobStatusQueued}, update, opts).Decode(&job)
+	err := db.ScanJobs.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	if job.TimeoutSeconds <= 0 {
+		job.TimeoutSeconds = core.DefaultScanTimeoutSeconds
+	}
+	job.DeadlineAt = now.Add(time.Duration(job.TimeoutSeconds) * time.Second)
+	_, err = db.ScanJobs.UpdateOne(ctx, bson.M{"_id": job.ID, "status": core.ScanJobStatusRunning}, bson.M{"$set": bson.M{
+		"timeout_seconds": job.TimeoutSeconds,
+		"deadline_at":     job.DeadlineAt,
+		"updated_at":      now,
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +248,7 @@ func (db *DB) CompleteScanJob(id primitive.ObjectID, resultsCount int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	_, err := db.ScanJobs.UpdateByID(ctx, id, bson.M{"$set": bson.M{
+	_, err := db.ScanJobs.UpdateOne(ctx, bson.M{"_id": id, "status": core.ScanJobStatusRunning}, bson.M{"$set": bson.M{
 		"status":        core.ScanJobStatusCompleted,
 		"results_count": resultsCount,
 		"completed_at":  now,
@@ -238,13 +262,87 @@ func (db *DB) FailScanJob(id primitive.ObjectID, message string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	_, err := db.ScanJobs.UpdateByID(ctx, id, bson.M{"$set": bson.M{
+	_, err := db.ScanJobs.UpdateOne(ctx, bson.M{"_id": id, "status": bson.M{"$in": []string{core.ScanJobStatusQueued, core.ScanJobStatusRunning}}}, bson.M{"$set": bson.M{
 		"status":       core.ScanJobStatusFailed,
 		"error":        message,
 		"completed_at": now,
 		"updated_at":   now,
 	}})
 	return err
+}
+
+func (db *DB) RequeueScanJob(id primitive.ObjectID, message string, delay time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	if delay < 0 {
+		delay = 0
+	}
+	_, err := db.ScanJobs.UpdateOne(ctx, bson.M{"_id": id, "status": core.ScanJobStatusRunning}, bson.M{
+		"$set": bson.M{
+			"status":        core.ScanJobStatusQueued,
+			"error":         message,
+			"not_before_at": now.Add(delay),
+			"updated_at":    now,
+		},
+		"$unset": bson.M{
+			"worker_id":   "",
+			"started_at":  "",
+			"deadline_at": "",
+		},
+	})
+	return err
+}
+
+func (db *DB) TimeoutScanJob(id primitive.ObjectID, message string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	_, err := db.ScanJobs.UpdateOne(ctx, bson.M{"_id": id, "status": core.ScanJobStatusRunning}, bson.M{"$set": bson.M{
+		"status":       core.ScanJobStatusTimedOut,
+		"error":        message,
+		"completed_at": now,
+		"updated_at":   now,
+	}})
+	return err
+}
+
+func (db *DB) CancelScanJob(id primitive.ObjectID, tenantID string) (*core.ScanJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	filter := bson.M{
+		"_id":    id,
+		"status": bson.M{"$in": []string{core.ScanJobStatusQueued, core.ScanJobStatusRunning}},
+	}
+	if strings.TrimSpace(tenantID) != "" {
+		filter["tenant_id"] = tenantID
+	}
+	update := bson.M{"$set": bson.M{
+		"status":              core.ScanJobStatusCancelled,
+		"cancel_requested_at": now,
+		"cancelled_at":        now,
+		"completed_at":        now,
+		"updated_at":          now,
+		"error":               "scan cancelled",
+	}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var job core.ScanJob
+	err := db.ScanJobs.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		existing, getErr := db.GetScanJob(id)
+		if getErr != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(tenantID) != "" && existing.TenantID != tenantID {
+			return nil, mongo.ErrNoDocuments
+		}
+		return existing, ErrScanJobNotCancellable
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
 }
 
 func (db *DB) PruneTrafficLogs(ctx context.Context) error {

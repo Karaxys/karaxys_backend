@@ -145,6 +145,38 @@ func TestValidateProductionEnvironmentAcceptsRuntimeAnalyzerEnvironment(t *testi
 	}
 }
 
+func TestValidateProductionEnvironmentAcceptsScannerWorkerDefaults(t *testing.T) {
+	t.Setenv("KARAXYS_ENV", "production")
+	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
+	t.Setenv("MONGO_DB_NAME", "karaxys")
+	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
+
+	if err := ValidateProductionEnvironment(ServiceScannerWorker); err != nil {
+		t.Fatalf("unexpected production validation error: %v", err)
+	}
+}
+
+func TestValidateProductionEnvironmentRejectsInvalidScannerLimits(t *testing.T) {
+	t.Setenv("KARAXYS_ENV", "production")
+	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
+	t.Setenv("MONGO_DB_NAME", "karaxys")
+	t.Setenv("KARAXYS_SECRET_KEY_B64", base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012")))
+	t.Setenv("KARAXYS_REDIS_ADDR", "redis.internal:6379")
+	t.Setenv("KARAXYS_QUEUE_BROKERS", "redpanda.internal:9092")
+	t.Setenv("KARAXYS_SCANNER_GLOBAL_CONCURRENCY", "0")
+	t.Setenv("KARAXYS_NUCLEI_RATE_LIMIT_PER_SECOND", "-1")
+
+	err := ValidateProductionEnvironment(ServiceScannerWorker)
+	if err == nil {
+		t.Fatalf("expected production validation error")
+	}
+	if !strings.Contains(err.Error(), "KARAXYS_SCANNER_GLOBAL_CONCURRENCY") || !strings.Contains(err.Error(), "KARAXYS_NUCLEI_RATE_LIMIT_PER_SECOND") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateProductionEnvironmentAcceptsSessionOnlyAPIEnvironment(t *testing.T) {
 	t.Setenv("KARAXYS_ENV", "production")
 	t.Setenv("MONGO_URI", "mongodb://mongo.internal:27017")
