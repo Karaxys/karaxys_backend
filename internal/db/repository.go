@@ -839,6 +839,112 @@ func (db *DB) getScanResults(p Pagination, inventoryID *primitive.ObjectID, jobI
 	return response, nil
 }
 
+func (db *DB) GetScanJobs(p Pagination, tenantID string, status string, inventoryID *primitive.ObjectID) (*PaginatedResponse, error) {
+	return db.getScanJobs(p, tenantID, status, inventoryID)
+}
+
+func (db *DB) GetScanJobsForAccount(p Pagination, accountID primitive.ObjectID, status string, inventoryID *primitive.ObjectID) (*PaginatedResponse, error) {
+	if accountID.IsZero() {
+		return db.getScanJobs(p, "", status, inventoryID)
+	}
+	return db.getScanJobs(p, accountID.Hex(), status, inventoryID)
+}
+
+func (db *DB) getScanJobs(p Pagination, tenantID string, status string, inventoryID *primitive.ObjectID) (*PaginatedResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if p.Limit < 1 {
+		p.Limit = 20
+	}
+	if p.Limit > 100 {
+		p.Limit = 100
+	}
+	if p.Offset < 0 {
+		p.Offset = 0
+	}
+	if p.Offset == 0 && p.Page > 0 {
+		p.Offset = (p.Page - 1) * p.Limit
+	}
+	if p.Page < 1 {
+		p.Page = (p.Offset / p.Limit) + 1
+	}
+
+	filter := bson.M{}
+	if strings.TrimSpace(tenantID) != "" {
+		filter["tenant_id"] = strings.TrimSpace(tenantID)
+	}
+	if strings.TrimSpace(status) != "" {
+		filter["status"] = strings.TrimSpace(status)
+	}
+	if inventoryID != nil {
+		filter["inventory_id"] = *inventoryID
+	}
+
+	total, err := db.ScanJobs.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	sortField := "created_at"
+	switch strings.ToLower(p.SortBy) {
+	case "updated_at":
+		sortField = "updated_at"
+	case "status":
+		sortField = "status"
+	case "test_type":
+		sortField = "test_type"
+	}
+	opts := options.Find().
+		SetLimit(int64(p.Limit)).
+		SetSkip(int64(p.Offset)).
+		SetSort(bson.D{{Key: sortField, Value: sanitizeSortOrder(p.SortOrder)}})
+
+	cursor, err := db.ScanJobs.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var jobs []core.ScanJob
+	if err = cursor.All(ctx, &jobs); err != nil {
+		return nil, err
+	}
+
+	totalPages := int(total) / p.Limit
+	if int(total)%p.Limit != 0 {
+		totalPages++
+	}
+	return &PaginatedResponse{
+		Data:       jobs,
+		Total:      total,
+		Page:       p.Page,
+		Offset:     p.Offset,
+		Limit:      p.Limit,
+		TotalPages: totalPages,
+	}, nil
+}
+
+func (db *DB) UpdateIssueStatus(id primitive.ObjectID, tenantID string, status string) (*core.Issue, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{"_id": id}
+	if strings.TrimSpace(tenantID) != "" {
+		filter["tenant_id"] = strings.TrimSpace(tenantID)
+	}
+	update := bson.M{"$set": bson.M{"status": status, "updated_at": time.Now().UTC()}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var updated core.Issue
+	if err := db.Issues.FindOneAndUpdate(ctx, filter, update, opts).Decode(&updated); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func sanitizeScanResultSortField(field string) string {
 	switch strings.ToLower(field) {
 	case "created_at":
@@ -852,4 +958,238 @@ func sanitizeScanResultSortField(field string) string {
 	default:
 		return "created_at"
 	}
+}
+
+type DailyIssueCount struct {
+	Day      string `json:"day"`
+	Critical int64  `json:"critical"`
+	High     int64  `json:"high"`
+	Medium   int64  `json:"medium"`
+	Low      int64  `json:"low"`
+}
+
+type TopEndpointSummary struct {
+	InventoryID string `json:"inventory_id"`
+	Path        string `json:"path"`
+	Method      string `json:"method"`
+	IssueCount  int64  `json:"issue_count"`
+}
+
+type MetricsSummary struct {
+	Inventory struct {
+		Total           int64 `json:"total"`
+		Critical        int64 `json:"critical"`
+		High            int64 `json:"high"`
+		Medium          int64 `json:"medium"`
+		Low             int64 `json:"low"`
+		Authenticated   int64 `json:"authenticated"`
+		Unauthenticated int64 `json:"unauthenticated"`
+	} `json:"inventory"`
+	Issues struct {
+		Total         int64 `json:"total"`
+		Critical      int64 `json:"critical"`
+		High          int64 `json:"high"`
+		Medium        int64 `json:"medium"`
+		Low           int64 `json:"low"`
+		Open          int64 `json:"open"`
+		AcceptedRisk  int64 `json:"accepted_risk"`
+		FalsePositive int64 `json:"false_positive"`
+		Fixed         int64 `json:"fixed"`
+	} `json:"issues"`
+	Scans struct {
+		Total     int64 `json:"total"`
+		Queued    int64 `json:"queued"`
+		Running   int64 `json:"running"`
+		Completed int64 `json:"completed"`
+		Failed    int64 `json:"failed"`
+		Cancelled int64 `json:"cancelled"`
+	} `json:"scans"`
+	Agents struct {
+		Total  int64 `json:"total"`
+		Online int64 `json:"online"`
+	} `json:"agents"`
+	SensitiveData struct {
+		PII       int64 `json:"pii"`
+		Financial int64 `json:"financial"`
+		Secrets   int64 `json:"secrets"`
+		Other     int64 `json:"other"`
+	} `json:"sensitive_data"`
+	DailyIssues  []DailyIssueCount    `json:"daily_issues"`
+	TopEndpoints []TopEndpointSummary `json:"top_endpoints"`
+}
+
+var (
+	piiTags       = []string{"EMAIL", "PHONE_NUMBER", "DATE_OF_BIRTH", "FULL_NAME", "US_SSN", "USER_ID", "USERNAME", "PERSON_NAME", "STREET_ADDRESS", "ADDRESS", "PASSPORT_NO", "DRIVERS_LICENSE", "CANADIAN_SIN", "FINNISH_PIN", "GERMAN_INSURANCE_ID", "INDIAN_AADHAR", "INDIAN_HEALTH_ID", "US_MEDICARE"}
+	financialTags = []string{"CREDIT_CARD", "VISA_CARD", "MASTER_CARD", "IBAN_CODE", "SWIFT_CODE", "INDIAN_PAN"}
+	secretTags    = []string{"PASSWORD", "AUTH_TOKEN_BEARER", "JWT_TOKEN", "AWS_KEY"}
+)
+
+func (db *DB) GetMetricsSummary(accountID primitive.ObjectID) (*MetricsSummary, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tenantID := accountID.Hex()
+	inv := db.Client.Database(db.Name).Collection("api_inventory")
+
+	countColl := func(coll *mongo.Collection, filter bson.M) int64 {
+		n, _ := coll.CountDocuments(ctx, filter)
+		return n
+	}
+
+	var summary MetricsSummary
+
+	// Inventory counts
+	summary.Inventory.Total = countColl(inv, bson.M{"tenant_id": tenantID})
+	summary.Inventory.Critical = countColl(inv, bson.M{"tenant_id": tenantID, "risk_level": "critical"})
+	summary.Inventory.High = countColl(inv, bson.M{"tenant_id": tenantID, "risk_level": "high"})
+	summary.Inventory.Medium = countColl(inv, bson.M{"tenant_id": tenantID, "risk_level": "medium"})
+	summary.Inventory.Low = countColl(inv, bson.M{"tenant_id": tenantID, "risk_level": "low"})
+	summary.Inventory.Authenticated = countColl(inv, bson.M{"tenant_id": tenantID, "auth_observed": true})
+	summary.Inventory.Unauthenticated = countColl(inv, bson.M{"tenant_id": tenantID, "auth_observed": bson.M{"$ne": true}})
+
+	// Issues counts
+	summary.Issues.Total = countColl(db.Issues, bson.M{"tenant_id": tenantID})
+	summary.Issues.Critical = countColl(db.Issues, bson.M{"tenant_id": tenantID, "severity": "critical"})
+	summary.Issues.High = countColl(db.Issues, bson.M{"tenant_id": tenantID, "severity": "high"})
+	summary.Issues.Medium = countColl(db.Issues, bson.M{"tenant_id": tenantID, "severity": "medium"})
+	summary.Issues.Low = countColl(db.Issues, bson.M{"tenant_id": tenantID, "severity": "low"})
+	summary.Issues.Open = countColl(db.Issues, bson.M{"tenant_id": tenantID, "status": "open"})
+	summary.Issues.AcceptedRisk = countColl(db.Issues, bson.M{"tenant_id": tenantID, "status": "accepted_risk"})
+	summary.Issues.FalsePositive = countColl(db.Issues, bson.M{"tenant_id": tenantID, "status": "false_positive"})
+	summary.Issues.Fixed = countColl(db.Issues, bson.M{"tenant_id": tenantID, "status": "fixed"})
+
+	// Scan job counts
+	summary.Scans.Total = countColl(db.ScanJobs, bson.M{"tenant_id": tenantID})
+	summary.Scans.Queued = countColl(db.ScanJobs, bson.M{"tenant_id": tenantID, "status": "queued"})
+	summary.Scans.Running = countColl(db.ScanJobs, bson.M{"tenant_id": tenantID, "status": "running"})
+	summary.Scans.Completed = countColl(db.ScanJobs, bson.M{"tenant_id": tenantID, "status": "completed"})
+	summary.Scans.Failed = countColl(db.ScanJobs, bson.M{"tenant_id": tenantID, "status": bson.M{"$in": []string{"failed", "timed_out"}}})
+	summary.Scans.Cancelled = countColl(db.ScanJobs, bson.M{"tenant_id": tenantID, "status": "cancelled"})
+
+	// Agent counts
+	onlineThreshold := time.Now().UTC().Add(-5 * time.Minute)
+	summary.Agents.Total = countColl(db.Agents, bson.M{"account_id": accountID})
+	summary.Agents.Online = countColl(db.Agents, bson.M{
+		"account_id":   accountID,
+		"status":       "active",
+		"last_seen_at": bson.M{"$gte": onlineThreshold},
+	})
+
+	// Sensitive data breakdown from inventory
+	summary.SensitiveData.PII = countColl(inv, bson.M{"tenant_id": tenantID, "sensitive_data": bson.M{"$in": piiTags}})
+	summary.SensitiveData.Financial = countColl(inv, bson.M{"tenant_id": tenantID, "sensitive_data": bson.M{"$in": financialTags}})
+	summary.SensitiveData.Secrets = countColl(inv, bson.M{"tenant_id": tenantID, "sensitive_data": bson.M{"$in": secretTags}})
+	// "Other" = has any sensitive_data but not in the above three categories
+	summary.SensitiveData.Other = countColl(inv, bson.M{
+		"tenant_id":      tenantID,
+		"sensitive_data": bson.M{"$exists": true, "$ne": []string{}},
+	}) - summary.SensitiveData.PII - summary.SensitiveData.Financial - summary.SensitiveData.Secrets
+	if summary.SensitiveData.Other < 0 {
+		summary.SensitiveData.Other = 0
+	}
+
+	// 7-day daily issue trend (group by day + severity)
+	weekAgo := time.Now().UTC().AddDate(0, 0, -6).Truncate(24 * time.Hour)
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"tenant_id":     tenantID,
+			"first_seen_at": bson.M{"$gte": weekAgo},
+		}}},
+		{{Key: "$project", Value: bson.M{
+			"severity": 1,
+			"day": bson.M{"$dateToString": bson.M{
+				"format": "%Y-%m-%d",
+				"date":   "$first_seen_at",
+				"timezone": "UTC",
+			}},
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   bson.M{"day": "$day", "severity": "$severity"},
+			"count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "_id.day", Value: 1}}}},
+	}
+	type aggResult struct {
+		ID struct {
+			Day      string `bson:"day"`
+			Severity string `bson:"severity"`
+		} `bson:"_id"`
+		Count int64 `bson:"count"`
+	}
+	cur, err := db.Issues.Aggregate(ctx, pipeline)
+	if err == nil {
+		defer cur.Close(ctx)
+		// Build a map of day → severity counts
+		dayMap := map[string]*DailyIssueCount{}
+		for cur.Next(ctx) {
+			var r aggResult
+			if cur.Decode(&r) == nil {
+				if _, ok := dayMap[r.ID.Day]; !ok {
+					dayMap[r.ID.Day] = &DailyIssueCount{Day: r.ID.Day}
+				}
+				switch r.ID.Severity {
+				case "critical":
+					dayMap[r.ID.Day].Critical += r.Count
+				case "high":
+					dayMap[r.ID.Day].High += r.Count
+				case "medium":
+					dayMap[r.ID.Day].Medium += r.Count
+				case "low":
+					dayMap[r.ID.Day].Low += r.Count
+				}
+			}
+		}
+		// Fill all 7 days (including zero-count days)
+		for i := 0; i < 7; i++ {
+			day := weekAgo.AddDate(0, 0, i).Format("2006-01-02")
+			if d, ok := dayMap[day]; ok {
+				summary.DailyIssues = append(summary.DailyIssues, *d)
+			} else {
+				summary.DailyIssues = append(summary.DailyIssues, DailyIssueCount{Day: day})
+			}
+		}
+	}
+	if summary.DailyIssues == nil {
+		summary.DailyIssues = []DailyIssueCount{}
+	}
+
+	// Top 5 endpoints by issue count
+	topPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"tenant_id": tenantID}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   "$inventory_id",
+			"count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "count", Value: -1}}}},
+		{{Key: "$limit", Value: 5}},
+	}
+	type topResult struct {
+		InventoryID primitive.ObjectID `bson:"_id"`
+		Count       int64              `bson:"count"`
+	}
+	topCur, err := db.Issues.Aggregate(ctx, topPipeline)
+	if err == nil {
+		defer topCur.Close(ctx)
+		for topCur.Next(ctx) {
+			var r topResult
+			if topCur.Decode(&r) == nil {
+				ep := TopEndpointSummary{InventoryID: r.InventoryID.Hex(), IssueCount: r.Count}
+				// Enrich with path/method from inventory
+				var invDoc struct {
+					Method      string `bson:"method"`
+					PathPattern string `bson:"path_pattern"`
+				}
+				if invErr := inv.FindOne(ctx, bson.M{"_id": r.InventoryID}).Decode(&invDoc); invErr == nil {
+					ep.Method = invDoc.Method
+					ep.Path = invDoc.PathPattern
+				}
+				summary.TopEndpoints = append(summary.TopEndpoints, ep)
+			}
+		}
+	}
+	if summary.TopEndpoints == nil {
+		summary.TopEndpoints = []TopEndpointSummary{}
+	}
+
+	return &summary, nil
 }

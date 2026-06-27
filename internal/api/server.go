@@ -88,13 +88,18 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /scan-jobs/{id}", s.handleGetScanJob)
 	mux.HandleFunc("GET /scan-results", s.handleGetScanResults)
 	mux.HandleFunc("POST /v1/scans", s.handleTriggerScan)
+	mux.HandleFunc("GET /v1/scans", s.handleListScanJobs)
 	mux.HandleFunc("GET /v1/scans/{id}", s.handleGetScanJob)
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.handleCancelScanJob)
 	mux.HandleFunc("POST /v1/scans/{id}/rerun", s.handleRerunScanJob)
 	mux.HandleFunc("GET /v1/scans/{id}/events", s.handleGetScanProgressEvents)
 	mux.HandleFunc("GET /issues", s.handleListIssues)
 	mux.HandleFunc("GET /v1/issues", s.handleListIssues)
+	mux.HandleFunc("PATCH /v1/issues/{id}", s.handleUpdateIssue)
 	mux.HandleFunc("GET /inventory/{id}", s.handleGetInventoryByID)
+	mux.HandleFunc("GET /v1/agents", s.handleListAgents)
+	mux.HandleFunc("GET /v1/agent-enrollments", s.handleListAgentEnrollments)
+	mux.HandleFunc("GET /v1/metrics/summary", s.handleMetricsSummary)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
 
 	if s.Ingest != nil {
@@ -941,6 +946,96 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
+func (s *Server) handleListScanJobs(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	sortBy := r.URL.Query().Get("sort_by")
+	sortOrder := r.URL.Query().Get("sort_order")
+	status := r.URL.Query().Get("status")
+	inventoryIDStr := r.URL.Query().Get("inventory_id")
+
+	var inventoryID *primitive.ObjectID
+	if inventoryIDStr != "" {
+		objID, err := primitive.ObjectIDFromHex(inventoryIDStr)
+		if err != nil {
+			http.Error(w, "Invalid inventory_id", http.StatusBadRequest)
+			return
+		}
+		inventoryID = &objID
+	}
+
+	p := db.Pagination{Page: page, Limit: limit, Offset: offset, SortBy: sortBy, SortOrder: sortOrder}
+	var results *db.PaginatedResponse
+	var err error
+	if accountID, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		results, err = s.DB.GetScanJobsForAccount(p, accountID, status, inventoryID)
+	} else {
+		results, err = s.DB.GetScanJobs(p, "", status, inventoryID)
+	}
+	if err != nil {
+		http.Error(w, "Database Error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, scanRoles...)
+	if !ok {
+		return
+	}
+	idStr := r.PathValue("id")
+	objID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	validStatuses := map[string]bool{
+		core.IssueStatusOpen:          true,
+		core.IssueStatusAcceptedRisk:  true,
+		core.IssueStatusFalsePositive: true,
+		core.IssueStatusFixed:         true,
+	}
+	if !validStatuses[body.Status] {
+		http.Error(w, "Invalid status. Must be one of: open, accepted_risk, false_positive, fixed", http.StatusBadRequest)
+		return
+	}
+	tenantID := ""
+	if _, scoped, parseErr := scopedAccountID(principal); scoped {
+		if parseErr != nil {
+			http.Error(w, "Invalid account", http.StatusUnauthorized)
+			return
+		}
+		tenantID = principal.AccountID
+	}
+	updated, err := s.DB.UpdateIssueStatus(objID, tenantID, body.Status)
+	if err != nil {
+		http.Error(w, "Database Error", http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.Error(w, "Issue not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) {
 	principal, ok := s.requireRoles(w, r, readRoles...)
 	if !ok {
@@ -968,4 +1063,55 @@ func (s *Server) handleGetInventoryByID(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(target)
+}
+
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	accountID, ok := requireAccountObjectID(w, principal)
+	if !ok {
+		return
+	}
+	agents, err := s.DB.ListAgentsForAccount(accountID)
+	if err != nil {
+		http.Error(w, "Failed to load agents", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": agents})
+}
+
+func (s *Server) handleListAgentEnrollments(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	accountID, ok := requireAccountObjectID(w, principal)
+	if !ok {
+		return
+	}
+	enrollments, err := s.DB.ListEnrollmentsForAccount(accountID)
+	if err != nil {
+		http.Error(w, "Failed to load enrollments", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": enrollments})
+}
+
+func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.requireRoles(w, r, readRoles...)
+	if !ok {
+		return
+	}
+	accountID, ok := requireAccountObjectID(w, principal)
+	if !ok {
+		return
+	}
+	summary, err := s.DB.GetMetricsSummary(accountID)
+	if err != nil {
+		http.Error(w, "Failed to load metrics", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }

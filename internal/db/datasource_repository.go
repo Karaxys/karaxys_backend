@@ -205,3 +205,40 @@ func (db *DB) MarkAgentSeen(agentID primitive.ObjectID) error {
 	}})
 	return err
 }
+
+func (db *DB) ListAgentsForAccount(accountID primitive.ObjectID) ([]core.Agent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opts := options.Find().SetSort(bson.D{{Key: "last_seen_at", Value: -1}}).SetLimit(100)
+	cursor, err := db.Agents.Find(ctx, bson.M{"account_id": accountID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var agents []core.Agent
+	if err := cursor.All(ctx, &agents); err != nil {
+		return nil, err
+	}
+	return agents, nil
+}
+
+func (db *DB) ListEnrollmentsForAccount(accountID primitive.ObjectID) ([]core.AgentEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	filter := bson.M{
+		"account_id": accountID,
+		"expires_at": bson.M{"$gt": time.Now().UTC()},
+		"used_at":    bson.M{"$exists": false},
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(50)
+	cursor, err := db.AgentEnrollments.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var enrollments []core.AgentEnrollment
+	if err := cursor.All(ctx, &enrollments); err != nil {
+		return nil, err
+	}
+	return enrollments, nil
+}

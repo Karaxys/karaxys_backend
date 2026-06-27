@@ -644,14 +644,8 @@ func trafficMetricUpdate(logEntry core.TrafficLog, baseURL string, pathPattern s
 		"created_at":           now,
 	}
 	setFields := bson.M{
-		"updated_at":    now,
-		"last_seen_at":  observed,
-		"method":        strings.ToUpper(strings.TrimSpace(logEntry.Method)),
-		"base_url":      baseURL,
-		"path_pattern":  pathPattern,
-		"status_class":  statusClass(statusCode),
-		"auth_observed": auth,
-		"risk_level":    riskLevel,
+		"updated_at":   now,
+		"last_seen_at": observed,
 	}
 	inc := bson.M{"request_count": int64(1)}
 	if statusCode >= 500 && statusCode <= 599 {
