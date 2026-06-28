@@ -18,6 +18,7 @@ RUN apt-get update \
     && useradd --system --uid 10001 --create-home karaxys
 
 WORKDIR /home/karaxys
+COPY --from=build /src/contracts ./contracts
 COPY --from=build /out/karaxys /usr/local/bin/karaxys
 
 USER 10001
