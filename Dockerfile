@@ -1,20 +1,35 @@
-FROM golang:1.26-bookworm AS build
+# syntax=docker/dockerfile:1.7
+# Universal build — selects the command via KARAXYS_CMD build-arg.
+# For production, use the dedicated per-service Dockerfiles.
+# ── build ─────────────────────────────────────────────────────────────────────
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
 
 ARG KARAXYS_CMD=api-server
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/karaxys ./cmd/${KARAXYS_CMD}
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+      -trimpath \
+      -ldflags="-s -w" \
+      -o /out/karaxys \
+      ./cmd/${KARAXYS_CMD}
 
-FROM debian:bookworm-slim
+# ── runtime ───────────────────────────────────────────────────────────────────
+FROM gcr.io/distroless/static-debian12:nonroot
 
-RUN useradd --system --uid 10001 --create-home karaxys
+LABEL org.opencontainers.image.title="karaxys" \
+      org.opencontainers.image.source="https://github.com/karaxys/karaxys"
 
-COPY --from=build /out/karaxys /usr/local/bin/karaxys
+COPY --from=build --chown=65532:65532 /src/contracts ./contracts
+COPY --from=build --chown=65532:65532 /out/karaxys /usr/local/bin/karaxys
 
-USER 10001
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/karaxys"]

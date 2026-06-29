@@ -16,18 +16,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -trimpath \
       -ldflags="-s -w" \
       -o /out/karaxys \
-      ./cmd/scanner-worker
+      ./cmd/ingestor
 
 # ── runtime ───────────────────────────────────────────────────────────────────
-# scanner-worker calls Nuclei HTTPS targets; distroless/static includes
-# ca-certificates so TLS verification works without any shell dependencies.
 FROM gcr.io/distroless/static-debian12:nonroot
 
-LABEL org.opencontainers.image.title="karaxys-scanner-worker" \
-      org.opencontainers.image.description="Karaxys Nuclei scanner worker" \
+LABEL org.opencontainers.image.title="karaxys-ingestor" \
+      org.opencontainers.image.description="Karaxys high-throughput ingestion service" \
       org.opencontainers.image.source="https://github.com/karaxys/karaxys"
 
 COPY --from=build --chown=65532:65532 /out/karaxys /usr/local/bin/karaxys
 
 USER 65532:65532
+EXPOSE 8082
 ENTRYPOINT ["/usr/local/bin/karaxys"]
