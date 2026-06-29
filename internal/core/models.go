@@ -113,6 +113,9 @@ const (
 	AuditActionAgentEnrollmentCreate = "agent_enrollment.create"
 	AuditActionAgentRegister         = "agent.register"
 	AuditActionSettingsUpdate        = "settings.update"
+	AuditActionIngestTokenCreate     = "ingest_token.create"
+	AuditActionIngestTokenRotate     = "ingest_token.rotate"
+	AuditActionIngestTokenAccess     = "ingest_token.access"
 	AuditStatusSuccess               = "success"
 	AuditStatusFailure               = "failure"
 )
@@ -228,21 +231,51 @@ const (
 	DataSourceStatusPending   = "pending"
 	DataSourceStatusConnected = "connected"
 	DataSourceStatusDeleted   = "deleted"
+
+	DataSourceConnectorEBPFDocker     = "ebpf_docker"
+	DataSourceConnectorEBPFKubernetes = "ebpf_kubernetes"
+	DataSourceConnectorBurp           = "burp"
+	DataSourceConnectorPostman        = "postman"
+	DataSourceConnectorHAR            = "har"
+
+	DataSourceEnvLocal      = "local"
+	DataSourceEnvDev        = "dev"
+	DataSourceEnvStaging    = "staging"
+	DataSourceEnvProduction = "production"
 )
 
 type DataSource struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	AccountID primitive.ObjectID `bson:"account_id" json:"account_id"`
-	Type      string             `bson:"type" json:"type"`
-	Name      string             `bson:"name" json:"name"`
-	Status    string             `bson:"status" json:"status"`
-	TargetURL string             `bson:"target_url,omitempty" json:"target_url,omitempty"`
-	Config    map[string]string  `bson:"config,omitempty" json:"config,omitempty"`
-	CreatedBy primitive.ObjectID `bson:"created_by,omitempty" json:"created_by,omitempty"`
-	DeletedBy primitive.ObjectID `bson:"deleted_by,omitempty" json:"deleted_by,omitempty"`
-	DeletedAt time.Time          `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
-	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	AccountID         primitive.ObjectID `bson:"account_id" json:"account_id"`
+	Type              string             `bson:"type" json:"type"`
+	ConnectorType     string             `bson:"connector_type,omitempty" json:"connector_type,omitempty"`
+	Environment       string             `bson:"environment,omitempty" json:"environment,omitempty"`
+	Name              string             `bson:"name" json:"name"`
+	Status            string             `bson:"status" json:"status"`
+	TargetURL         string             `bson:"target_url,omitempty" json:"target_url,omitempty"`
+	Config            map[string]string  `bson:"config,omitempty" json:"config,omitempty"`
+	LastTrafficSeenAt time.Time          `bson:"last_traffic_seen_at,omitempty" json:"last_traffic_seen_at,omitempty"`
+	CreatedBy         primitive.ObjectID `bson:"created_by,omitempty" json:"created_by,omitempty"`
+	DeletedBy         primitive.ObjectID `bson:"deleted_by,omitempty" json:"deleted_by,omitempty"`
+	DeletedAt         time.Time          `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
+	CreatedAt         time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+// AccountIngestToken is the account-level token used by collectors to send traffic
+// to POST /ingest. It uses a hash for fast O(1) lookup/validation and encrypted
+// storage so the raw token can always be displayed in Settings without rotation.
+type AccountIngestToken struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	AccountID   primitive.ObjectID `bson:"account_id" json:"account_id"`
+	TokenHash   string             `bson:"token_hash" json:"-"`
+	TokenNonce  string             `bson:"token_nonce" json:"-"`
+	TokenCipher string             `bson:"token_cipher" json:"-"`
+	TokenPrefix string             `bson:"token_prefix" json:"token_prefix"`
+	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+	RotatedAt   time.Time          `bson:"rotated_at,omitempty" json:"rotated_at,omitempty"`
+	LastUsedAt  time.Time          `bson:"last_used_at,omitempty" json:"last_used_at,omitempty"`
 }
 
 type AgentEnrollment struct {

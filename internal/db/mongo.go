@@ -40,6 +40,7 @@ type DB struct {
 	Sessions             *mongo.Collection
 	OAuthIdentities      *mongo.Collection
 	DataSources          *mongo.Collection
+	AccountIngestTokens  *mongo.Collection
 	AgentEnrollments     *mongo.Collection
 	Agents               *mongo.Collection
 	APIParameters        *mongo.Collection
@@ -113,6 +114,7 @@ func Connect(uri string, dbName string, retentionOverrides ...LogRetention) (*DB
 		Sessions:             mongoDB.Collection("sessions"),
 		OAuthIdentities:      mongoDB.Collection("oauth_identities"),
 		DataSources:          mongoDB.Collection("data_sources"),
+		AccountIngestTokens:  mongoDB.Collection("account_ingest_tokens"),
 		AgentEnrollments:     mongoDB.Collection("agent_enrollments"),
 		Agents:               mongoDB.Collection("agents"),
 		APIParameters:        mongoDB.Collection("api_parameters"),
@@ -577,7 +579,7 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	return createIndexes(ctx, "agents", db.Agents, []mongo.IndexModel{
+	if err := createIndexes(ctx, "agents", db.Agents, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "token_hash", Value: 1}},
 			Options: options.Index().SetName("agents_token_hash_unique").SetUnique(true),
@@ -589,6 +591,19 @@ func (db *DB) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "data_source_id", Value: 1}, {Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("agents_data_source_created_at"),
+		},
+	}); err != nil {
+		return err
+	}
+
+	return createIndexes(ctx, "account_ingest_tokens", db.AccountIngestTokens, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "account_id", Value: 1}},
+			Options: options.Index().SetName("account_ingest_tokens_account_unique").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "token_hash", Value: 1}},
+			Options: options.Index().SetName("account_ingest_tokens_token_hash_unique").SetUnique(true),
 		},
 	})
 }
