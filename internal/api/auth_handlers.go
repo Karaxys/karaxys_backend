@@ -103,6 +103,9 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditAuth(r, core.AuditActionSignup, core.AuditStatusSuccess, user.ID.Hex(), account.ID.Hex(), "")
+	// Pre-create the ingest token in the background so it's available immediately
+	// when the user reaches the Quick Start page after signup.
+	go s.ensureAccountIngestToken(account.ID)
 	writeJSON(w, http.StatusCreated, resp)
 }
 

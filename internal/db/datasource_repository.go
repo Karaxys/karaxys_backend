@@ -222,6 +222,52 @@ func (db *DB) ListAgentsForAccount(accountID primitive.ObjectID) ([]core.Agent, 
 	return agents, nil
 }
 
+// MarkIngestTrafficSeen updates last_traffic_seen_at and ensures status=connected on
+// the most recently created non-deleted data source for the account. If no data source
+// exists it auto-creates a default EBPF_LINUX one so the dashboard shows activity
+// immediately without requiring manual setup first.
+func (db *DB) MarkIngestTrafficSeen(ctx context.Context, accountID primitive.ObjectID) error {
+	now := time.Now().UTC()
+
+	// Try to update an existing non-deleted data source (prefer pending → connected promotion).
+	filter := bson.M{
+		"account_id": accountID,
+		"deleted_at": zeroOrMissingTimeFilter(),
+	}
+	update := bson.M{"$set": bson.M{
+		"status":               core.DataSourceStatusConnected,
+		"last_traffic_seen_at": now,
+		"updated_at":           now,
+	}}
+	opts := options.FindOneAndUpdate().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetReturnDocument(options.After)
+
+	var updated core.DataSource
+	err := db.DataSources.FindOneAndUpdate(ctx, filter, update, opts).Decode(&updated)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, mongo.ErrNoDocuments) {
+		return err
+	}
+
+	// No data source yet — auto-create a default one so the UI shows activity.
+	source := core.DataSource{
+		ID:                primitive.NewObjectID(),
+		AccountID:         accountID,
+		Type:              core.DataSourceTypeEBPFLinux,
+		ConnectorType:     core.DataSourceConnectorEBPFDocker,
+		Name:              "eBPF Agent",
+		Status:            core.DataSourceStatusConnected,
+		LastTrafficSeenAt: now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	_, err = db.DataSources.InsertOne(ctx, source)
+	return err
+}
+
 func (db *DB) ListEnrollmentsForAccount(accountID primitive.ObjectID) ([]core.AgentEnrollment, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

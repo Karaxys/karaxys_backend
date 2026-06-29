@@ -360,7 +360,7 @@ func isExemptPath(path string) bool {
 }
 
 func isIngestionPath(path string) bool {
-	return path == "/v1/ingest/conversations"
+	return path == "/v1/ingest/conversations" || path == "/ingest"
 }
 
 func isWriteMethod(method string) bool {

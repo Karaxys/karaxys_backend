@@ -101,6 +101,15 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /v1/agent-enrollments", s.handleListAgentEnrollments)
 	mux.HandleFunc("GET /v1/metrics/summary", s.handleMetricsSummary)
 	mux.HandleFunc("POST /v1/ingest/conversations", s.handleIngestConversation)
+	// Akto-style account-token ingest — supports single and batched conversations.
+	mux.HandleFunc("POST /ingest", s.handleAccountIngest)
+	// Ingest token management — admin only, requires dashboard session.
+	mux.HandleFunc("GET /account/ingest-token", s.handleGetIngestToken)
+	mux.HandleFunc("POST /account/ingest-token/rotate", s.handleRotateIngestToken)
+	// Versioned data-source aliases for forward-compatibility.
+	mux.HandleFunc("GET /v1/data-sources", s.handleListDataSources)
+	mux.HandleFunc("POST /v1/data-sources", s.handleCreateDataSource)
+	mux.HandleFunc("DELETE /v1/data-sources/{id}", s.handleDeleteDataSource)
 
 	if s.Ingest != nil {
 		s.Ingest.AgentAuthenticator = s.authenticateAgentToken

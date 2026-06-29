@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -186,6 +187,68 @@ func (s *Service) HandleConversation(w http.ResponseWriter, r *http.Request) {
 		SchemaVersion: conversation.SchemaVersion,
 	})
 }
+
+// ProcessConversationForTenant processes a single raw JSON conversation with a
+// server-authoritative tenant ID. Used by POST /ingest (account-token path) so
+// the caller never controls which account the data lands in.
+// Returns "accepted", "duplicate", or "dropped" on success. On validation or
+// persistence failure it returns a non-nil IngestProcessError with an HTTP status code.
+func (s *Service) ProcessConversationForTenant(ctx context.Context, raw []byte, tenantID string, remoteAddr string) (string, error) {
+	if s.Store == nil {
+		return "", &IngestProcessError{Code: http.StatusInternalServerError, Msg: "ingestion store unavailable"}
+	}
+	conversation, err := contracts.DecodeAndValidateHTTPConversation(raw)
+	if err != nil {
+		s.recordDeadLetterAddr("invalid_conversation_contract", raw, remoteAddr)
+		return "", &IngestProcessError{Code: http.StatusBadRequest, Msg: "invalid conversation contract"}
+	}
+	// Server-side tenant binding — overrides anything the client sent.
+	conversation.TenantID = tenantID
+
+	logEntry := ConversationToTrafficLog(conversation)
+	persistedLogEntry := redact.TrafficLog(logEntry)
+	if err := s.Store.SaveLog(persistedLogEntry); err != nil {
+		if errors.Is(err, core.ErrTrafficLogDuplicate) {
+			s.recordIngestionLog("duplicate", conversation, "duplicate conversation")
+			return "duplicate", nil
+		}
+		if errors.Is(err, core.ErrTrafficLogDropped) {
+			s.recordIngestionLog("dropped", conversation, "traffic log dropped by retention or noise policy")
+			return "dropped", nil
+		}
+		s.recordIngestionLog("failed", conversation, err.Error())
+		s.recordDeadLetterAddr("traffic_log_persist_failed", raw, remoteAddr)
+		return "", &IngestProcessError{Code: http.StatusInternalServerError, Msg: "failed to persist conversation"}
+	}
+	if conversationStore, ok := s.Store.(ConversationStore); ok {
+		persistedConversation := redact.TrafficConversation(ConversationToTrafficConversation(conversation))
+		if err := conversationStore.SaveConversation(persistedConversation); err != nil {
+			s.recordIngestionLog("failed", conversation, err.Error())
+			s.recordDeadLetterAddr("traffic_conversation_persist_failed", raw, remoteAddr)
+			return "", &IngestProcessError{Code: http.StatusInternalServerError, Msg: "failed to persist conversation"}
+		}
+	}
+	if s.Publisher != nil {
+		if err := s.Publisher.PublishConversation(ctx, ConversationToQueueEvent(conversation)); err != nil {
+			s.recordIngestionLog("failed", conversation, "conversation event publish failed: "+err.Error())
+			s.recordDeadLetterAddr("conversation_event_publish_failed", raw, remoteAddr)
+			return "", &IngestProcessError{Code: http.StatusInternalServerError, Msg: "failed to enqueue conversation"}
+		}
+	} else if s.Analyzer != nil {
+		s.Analyzer.ProcessLog(logEntry)
+	}
+	s.recordIngestionLog("accepted", conversation, "")
+	return "accepted", nil
+}
+
+// IngestProcessError carries an HTTP status code alongside the error message so
+// callers can translate it directly to an HTTP response.
+type IngestProcessError struct {
+	Code int
+	Msg  string
+}
+
+func (e *IngestProcessError) Error() string { return e.Msg }
 
 func ConversationToTrafficLog(conversation contracts.HTTPConversation) core.TrafficLog {
 	return core.TrafficLog{
@@ -386,6 +449,10 @@ func (s *Service) recordIngestionLog(status string, conversation contracts.HTTPC
 }
 
 func (s *Service) recordDeadLetter(reason string, raw []byte, r *http.Request) {
+	s.recordDeadLetterAddr(reason, raw, r.RemoteAddr)
+}
+
+func (s *Service) recordDeadLetterAddr(reason string, raw []byte, remoteAddr string) {
 	store, ok := s.Store.(DeadLetterStore)
 	if !ok {
 		return
@@ -399,7 +466,7 @@ func (s *Service) recordDeadLetter(reason string, raw []byte, r *http.Request) {
 		Reason:         reason,
 		SchemaVersion:  envelope.SchemaVersion,
 		AgentID:        envelope.AgentID,
-		RemoteAddr:     r.RemoteAddr,
+		RemoteAddr:     remoteAddr,
 		PayloadExcerpt: redact.Text(payloadExcerpt(raw)),
 	})
 }

@@ -180,6 +180,8 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.DB.MarkUserLogin(user.ID)
 	s.auditAuth(r, core.AuditActionLogin, core.AuditStatusSuccess, user.ID.Hex(), account.ID.Hex(), "oauth "+provider)
+	// Pre-create the ingest token for new OAuth accounts (idempotent for existing ones).
+	go s.ensureAccountIngestToken(account.ID)
 	http.Redirect(w, r, dashboardURL()+"/auth/callback", http.StatusFound)
 }
 
