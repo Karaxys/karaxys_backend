@@ -1,0 +1,97 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ── Fast tests: excludes scanner-worker (heavy Nuclei dep) ───────────────────
+  test-fast:
+    name: Fast Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Vet
+        run: go vet $(go list ./... | grep -v '/cmd/scanner-worker')
+
+      - name: Fast tests (no scanner-worker)
+        run: go test -race -count=1 -timeout=120s \
+          $(go list ./... | grep -v '/cmd/scanner-worker')
+
+  # ── Build: all commands compile without error ─────────────────────────────────
+  build:
+    name: Build All Commands
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build all commands
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" ./cmd/api-server
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" ./cmd/ingestor
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" ./cmd/runtime-analyzer
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" ./cmd/dead-letter-consumer
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" ./cmd/scanner-worker
+
+  # ── Scanner-worker tests: run separately so fast PR checks stay fast ──────────
+  test-scanner:
+    name: Scanner Worker Tests
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Scanner-worker unit tests
+        run: go test -count=1 -timeout=300s \
+          ./cmd/scanner-worker/... \
+          ./internal/scanner/... \
+          ./internal/scancontrol/... \
+          ./internal/scanplan/...
+
+  # ── Docker build smoke-check ──────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        dockerfile:
+          - Dockerfile.api-server
+          - Dockerfile.ingestor
+          - Dockerfile.runtime-analyzer
+          - Dockerfile.dead-letter-consumer
+          - Dockerfile.scanner-worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.dockerfile }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.dockerfile }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
