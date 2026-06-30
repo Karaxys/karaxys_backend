@@ -23,11 +23,12 @@ jobs:
         run: go mod download
 
       - name: Vet
-        run: go vet $(go list ./... | grep -v '/cmd/scanner-worker')
+        run: |
+          go list ./... | grep -v '/cmd/scanner-worker' | xargs go vet
 
       - name: Fast tests (no scanner-worker)
-        run: go test -race -count=1 -timeout=120s \
-          $(go list ./... | grep -v '/cmd/scanner-worker')
+        run: |
+          go list ./... | grep -v '/cmd/scanner-worker' | xargs go test -race -count=1 -timeout=120s
 
   # ── Build: all commands compile without error ─────────────────────────────────
   build:
@@ -63,11 +64,12 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Scanner-worker unit tests
-        run: go test -count=1 -timeout=300s \
-          ./cmd/scanner-worker/... \
-          ./internal/scanner/... \
-          ./internal/scancontrol/... \
-          ./internal/scanplan/...
+        run: |
+          go test -count=1 -timeout=300s \
+            ./cmd/scanner-worker/... \
+            ./internal/scanner/... \
+            ./internal/scancontrol/... \
+            ./internal/scanplan/...
 
   # ── Docker build smoke-check ──────────────────────────────────────────────────
   docker-build:
