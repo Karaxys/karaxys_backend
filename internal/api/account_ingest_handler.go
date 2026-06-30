@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -48,7 +49,7 @@ func (s *Server) handleAccountIngest(w http.ResponseWriter, r *http.Request) {
 	tenantID := accountID.Hex()
 
 	// Fire-and-forget last-used update — must not block ingestion.
-	go s.DB.TouchIngestToken(r.Context(), accountID)
+	go s.DB.TouchIngestToken(context.Background(), accountID)
 
 	// ── 2. Content-type check ────────────────────────────────────────────────
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
@@ -135,7 +136,7 @@ func (s *Server) handleAccountIngest(w http.ResponseWriter, r *http.Request) {
 	// Only bother when at least one conversation was actually accepted.
 	if accepted > 0 {
 		go func() {
-			if err := s.DB.MarkIngestTrafficSeen(r.Context(), accountID); err != nil {
+			if err := s.DB.MarkIngestTrafficSeen(context.Background(), accountID); err != nil {
 				log.Printf("MarkIngestTrafficSeen account=%s: %v", tenantID, err)
 			}
 		}()
