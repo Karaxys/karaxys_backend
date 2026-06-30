@@ -17,6 +17,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w" \
       -o /out/karaxys \
       ./cmd/runtime-analyzer
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+      -trimpath \
+      -ldflags="-s -w" \
+      -o /out/karaxys-healthcheck \
+      ./cmd/healthcheck
 
 # ── runtime ───────────────────────────────────────────────────────────────────
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -26,6 +34,7 @@ LABEL org.opencontainers.image.title="karaxys-runtime-analyzer" \
       org.opencontainers.image.source="https://github.com/karaxys/karaxys"
 
 COPY --from=build --chown=65532:65532 /out/karaxys /usr/local/bin/karaxys
+COPY --from=build --chown=65532:65532 /out/karaxys-healthcheck /usr/local/bin/karaxys-healthcheck
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/karaxys"]

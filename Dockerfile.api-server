@@ -17,6 +17,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w" \
       -o /out/karaxys \
       ./cmd/api-server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+      -trimpath \
+      -ldflags="-s -w" \
+      -o /out/karaxys-healthcheck \
+      ./cmd/healthcheck
 
 # ── runtime ───────────────────────────────────────────────────────────────────
 # distroless/static: ~2 MB, includes ca-certificates + tz data, no shell.
@@ -30,6 +38,7 @@ LABEL org.opencontainers.image.title="karaxys-api-server" \
 WORKDIR /home/nonroot
 COPY --from=build --chown=65532:65532 /src/contracts ./contracts
 COPY --from=build --chown=65532:65532 /out/karaxys /usr/local/bin/karaxys
+COPY --from=build --chown=65532:65532 /out/karaxys-healthcheck /usr/local/bin/karaxys-healthcheck
 
 USER 65532:65532
 EXPOSE 8081
