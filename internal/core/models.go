@@ -454,22 +454,22 @@ type TrafficMetricEvent struct {
 }
 
 type ScanResult struct {
-	ID             primitive.ObjectID `bson:"_id,omitempty"`
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	TenantID       string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
 	ProjectID      string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	JobID          primitive.ObjectID `bson:"job_id,omitempty" json:"job_id,omitempty"`
 	SuiteID        primitive.ObjectID `bson:"suite_id,omitempty" json:"suite_id,omitempty"`
 	SchemaVersion  string             `bson:"schema_version" json:"schema_version"`
-	InventoryID    primitive.ObjectID `bson:"inventory_id"`
-	TestType       string             `bson:"test_type"`
-	Vulnerable     bool               `bson:"vulnerable"`
-	Severity       string             `bson:"severity"`
-	Description    string             `bson:"description"`
-	Proof          string             `bson:"proof"`
-	ResponseStatus int                `bson:"response_status"`
+	InventoryID    primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
+	TestType       string             `bson:"test_type" json:"test_type"`
+	Vulnerable     bool               `bson:"vulnerable" json:"vulnerable"`
+	Severity       string             `bson:"severity" json:"severity"`
+	Description    string             `bson:"description" json:"description"`
+	Proof          string             `bson:"proof" json:"proof"`
+	ResponseStatus int                `bson:"response_status" json:"response_status"`
 	ResponseHeader string             `bson:"response_headers,omitempty" json:"response_headers,omitempty"`
-	ResponseBody   string             `bson:"response_body"`
-	CreatedAt      time.Time          `bson:"created_at"`
+	ResponseBody   string             `bson:"response_body" json:"response_body"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
 }
 
 const (
