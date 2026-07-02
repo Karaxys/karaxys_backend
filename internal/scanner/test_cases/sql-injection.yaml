@@ -1,0 +1,46 @@
+id: sql-injection-error-based
+info:
+  name: Error-Based SQL Injection
+  author: karaxys
+  severity: high
+  description: The Scanner replays the request with a SQL metacharacter payload injected into a request parameter and checks whether the response leaks a database error. Reflected SQL errors indicate unsanitized input reaching a SQL query. Error-based detection is used to keep false positives low.
+  tags: api, injection, sqli, OWASP
+  reference:
+    - "https://owasp.org/www-community/attacks/SQL_Injection"
+    - "https://cwe.mitre.org/data/definitions/89.html"
+  classification:
+    cwe-id:
+      - CWE-89
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        {{header_block}}
+
+        {{polluted_body}}
+
+    matchers-condition: or
+    matchers:
+      - type: word
+        name: vulnerable
+        part: body
+        case-insensitive: true
+        condition: or
+        words:
+          - "you have an error in your sql syntax"
+          - "warning: mysql"
+          - "unclosed quotation mark after the character string"
+          - "quoted string not properly terminated"
+          - "pg_query()"
+          - "syntax error at or near"
+          - "sqlite3.operationalerror"
+          - "sqlstate["
+          - "ora-00933"
+          - "ora-01756"
+          - "odbc sql server driver"

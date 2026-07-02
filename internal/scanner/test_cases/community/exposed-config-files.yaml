@@ -1,0 +1,42 @@
+id: exposed-config-files
+info:
+  name: Exposed Configuration / Secret Files
+  author: karaxys
+  severity: high
+  description: Checks for well-known sensitive files that should never be publicly reachable — version-control metadata, environment files, container manifests, and cloud credential files. Any 200 response containing the file's characteristic contents is a secret-exposure finding.
+  tags: exposure, config, secret, misconfiguration
+  reference:
+    - "https://owasp.org/www-project-web-security-testing-guide/"
+  classification:
+    cwe-id:
+      - CWE-538
+      - CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/config"
+      - "{{BaseURL}}/.env"
+      - "{{BaseURL}}/docker-compose.yml"
+      - "{{BaseURL}}/.aws/credentials"
+      - "{{BaseURL}}/config.json"
+      - "{{BaseURL}}/.npmrc"
+
+    stop-at-first-match: true
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "[core]"
+          - "repositoryformatversion"
+          - "aws_access_key_id"
+          - "AWS_SECRET_ACCESS_KEY"
+          - "DB_PASSWORD"
+          - "_authToken"
+          - "version:"

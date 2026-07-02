@@ -1,0 +1,53 @@
+id: bola-chained-enumeration
+info:
+  name: BOLA via Chained Object-ID Enumeration
+  author: karaxys
+  severity: high
+  description: A two-step test. Step 1 requests the endpoint and extracts an object identifier from the response. Step 2 requests that same object by id using the attacker's token. If the attacker can read an object whose id was discovered from a listing they should not have privileged access to, this indicates Broken Object Level Authorization reachable by enumeration. Demonstrates native Nuclei request chaining (internal extractor feeding a later request).
+  tags: api, bola, authorization, chained, OWASP
+  reference:
+    - "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization.md"
+  classification:
+    cwe-id:
+      - CWE-639
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        User-Agent: Karaxys-Scanner/1.0
+
+      - |
+        GET {{path}}/{{objectId}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        User-Agent: Karaxys-Scanner/1.0
+
+    extractors:
+      - type: regex
+        name: objectId
+        part: body
+        internal: true
+        group: 1
+        regex:
+          - '"(?:id|_id|uuid|objectId)"\s*:\s*"?([0-9a-fA-F-]{1,64})"?'
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'status_code >= 200 && status_code < 300'
+          - 'contains(content_type, "json")'
+          - 'len(body) > 2'
+          - '!contains_any(body, "Unauthorized", "Forbidden", "Access Denied", "error", "Error")'
+        condition: and
+
+      - type: status
+        name: secure
+        status:
+          - 401
+          - 403
+          - 404

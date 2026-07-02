@@ -14,6 +14,7 @@ import (
 	"karaxys_backend/internal/ingest"
 	"karaxys_backend/internal/queue"
 	"karaxys_backend/internal/scancontrol"
+	"karaxys_backend/internal/scanner"
 	"karaxys_backend/internal/scanplan"
 	"karaxys_backend/internal/scanpolicy"
 	"karaxys_backend/internal/security/scansecrets"
@@ -63,8 +64,10 @@ func (s *Server) Start() {
 	}
 }
 
-func (s *Server) StartWithContext(ctx context.Context, addr string) error {
-	mux := http.NewServeMux()
+// registerRoutes wires every HTTP route onto mux. Kept separate from
+// StartWithContext so route registration can be exercised in tests (Go's
+// ServeMux panics on conflicting wildcard patterns at registration time).
+func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/signup", s.handleSignup)
 	mux.HandleFunc("POST /auth/login", s.handleLogin)
 	mux.HandleFunc("POST /auth/refresh", s.handleRefresh)
@@ -84,6 +87,14 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /settings/security", s.handleGetSecuritySettings)
 	mux.HandleFunc("PUT /settings/security", s.handleUpdateSecuritySettings)
 	mux.HandleFunc("GET /inventory", s.handleGetInventory)
+	mux.HandleFunc("GET /scan/test-types", s.handleListTestTypes)
+	mux.HandleFunc("GET /v1/scan/test-types", s.handleListTestTypes)
+	mux.HandleFunc("GET /scan/suite-presets", s.handleListSuitePresets)
+	mux.HandleFunc("GET /v1/scan/suite-presets", s.handleListSuitePresets)
+	mux.HandleFunc("POST /scan/suite", s.handleTriggerSuite)
+	mux.HandleFunc("POST /v1/scans/suite", s.handleTriggerSuite)
+	mux.HandleFunc("GET /scan/suites/{id}", s.handleGetSuite)
+	mux.HandleFunc("GET /v1/scan/suites/{id}", s.handleGetSuite)
 	mux.HandleFunc("POST /scan", s.handleTriggerScan)
 	mux.HandleFunc("GET /scan-jobs/{id}", s.handleGetScanJob)
 	mux.HandleFunc("GET /scan-results", s.handleGetScanResults)
@@ -110,6 +121,11 @@ func (s *Server) StartWithContext(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /v1/data-sources", s.handleListDataSources)
 	mux.HandleFunc("POST /v1/data-sources", s.handleCreateDataSource)
 	mux.HandleFunc("DELETE /v1/data-sources/{id}", s.handleDeleteDataSource)
+}
+
+func (s *Server) StartWithContext(ctx context.Context, addr string) error {
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
 
 	if s.Ingest != nil {
 		s.Ingest.AgentAuthenticator = s.authenticateAgentToken
@@ -322,6 +338,36 @@ type ScanJobResponse struct {
 	StartedAt      string `json:"started_at,omitempty"`
 	DeadlineAt     string `json:"deadline_at,omitempty"`
 	CompletedAt    string `json:"completed_at,omitempty"`
+}
+
+type testTypeResponse struct {
+	TestType             string `json:"test_type"`
+	Category             string `json:"category"`
+	Severity             string `json:"severity"`
+	Description          string `json:"description,omitempty"`
+	RequiresAttackerAuth bool   `json:"requires_attacker_auth"`
+}
+
+// handleListTestTypes exposes the scanner's registered test types (including
+// auto-discovered community templates) so the dashboard can build its scan
+// options from the live registry instead of a hardcoded list.
+func (s *Server) handleListTestTypes(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireRoles(w, r, readRoles...); !ok {
+		return
+	}
+	metas := scanner.DefaultTemplateRegistry().ListMetadata()
+	out := make([]testTypeResponse, 0, len(metas))
+	for _, meta := range metas {
+		out = append(out, testTypeResponse{
+			TestType:             meta.TestType,
+			Category:             meta.Category,
+			Severity:             meta.Severity,
+			Description:          meta.Description,
+			RequiresAttackerAuth: meta.RequiresAttackerAuth,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": out})
 }
 
 func (s *Server) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
@@ -862,6 +908,7 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 	sortOrder := r.URL.Query().Get("sort_order")
 	inventoryIDStr := r.URL.Query().Get("inventory_id")
 	jobIDStr := r.URL.Query().Get("job_id")
+	suiteIDStr := r.URL.Query().Get("suite_id")
 
 	var inventoryID *primitive.ObjectID
 	if inventoryIDStr != "" {
@@ -881,6 +928,15 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 		}
 		jobID = &objID
 	}
+	var suiteID *primitive.ObjectID
+	if suiteIDStr != "" {
+		objID, err := primitive.ObjectIDFromHex(suiteIDStr)
+		if err != nil {
+			http.Error(w, "Invalid suite_id", http.StatusBadRequest)
+			return
+		}
+		suiteID = &objID
+	}
 
 	pagination := db.Pagination{
 		Page:      page,
@@ -896,9 +952,9 @@ func (s *Server) handleGetScanResults(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid account", http.StatusUnauthorized)
 			return
 		}
-		results, err = s.DB.GetScanResultsForAccount(pagination, inventoryID, jobID, accountID)
+		results, err = s.DB.GetScanResultsForAccount(pagination, inventoryID, jobID, suiteID, accountID)
 	} else {
-		results, err = s.DB.GetScanResults(pagination, inventoryID, jobID)
+		results, err = s.DB.GetScanResults(pagination, inventoryID, jobID, suiteID)
 	}
 	if err != nil {
 		http.Error(w, "Database Error", http.StatusInternalServerError)

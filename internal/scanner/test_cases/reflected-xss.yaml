@@ -1,0 +1,42 @@
+id: reflected-xss
+info:
+  name: Reflected Cross-Site Scripting (XSS)
+  author: karaxys
+  severity: medium
+  description: The Scanner injects a unique HTML/script marker into a request parameter and checks whether it is reflected back into the response body unescaped. Unescaped reflection of attacker-controlled markup indicates a reflected XSS sink.
+  tags: api, xss, injection, OWASP
+  reference:
+    - "https://owasp.org/www-community/attacks/xss/"
+    - "https://cwe.mitre.org/data/definitions/79.html"
+  classification:
+    cwe-id:
+      - CWE-79
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        {{header_block}}
+
+        {{polluted_body}}
+
+    matchers-condition: and
+    matchers:
+      - type: word
+        name: vulnerable
+        part: body
+        words:
+          - "kx7xss<svg/onload=alert(1)>"
+
+      - type: word
+        part: header
+        case-insensitive: true
+        words:
+          - "text/html"
+          - "application/xhtml"
+        condition: or

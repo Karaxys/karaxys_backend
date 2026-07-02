@@ -5,7 +5,29 @@ import (
 	"testing"
 
 	"karaxys_backend/internal/core"
+
+	"gopkg.in/yaml.v3"
 )
+
+func TestAllRegisteredTemplatesAreValidYAML(t *testing.T) {
+	registry := DefaultTemplateRegistry()
+	for _, meta := range registry.ListMetadata() {
+		content, err := registry.GetTemplate(meta.TestType)
+		if err != nil {
+			t.Fatalf("%s: get template: %v", meta.TestType, err)
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+			t.Fatalf("%s (%s): invalid YAML: %v", meta.TestType, meta.Filename, err)
+		}
+		if _, ok := doc["id"]; !ok {
+			t.Fatalf("%s (%s): template missing id", meta.TestType, meta.Filename)
+		}
+		if _, ok := doc["info"]; !ok {
+			t.Fatalf("%s (%s): template missing info block", meta.TestType, meta.Filename)
+		}
+	}
+}
 
 func TestBuildTemplateVarsUsesPollutedBodyAndFiltersHeaders(t *testing.T) {
 	config := core.ScanConfig{
@@ -75,8 +97,10 @@ func TestTemplateRegistryReturnsMetadataAndContent(t *testing.T) {
 
 func TestTemplateRegistryListIsSortedAndComplete(t *testing.T) {
 	metadata := DefaultTemplateRegistry().ListMetadata()
-	if len(metadata) != len(defaultTemplates) {
-		t.Fatalf("unexpected metadata count: %d", len(metadata))
+	// At least the hand-authored templates; community templates auto-discovered
+	// from the embedded directory add to this count.
+	if len(metadata) < len(defaultTemplates) {
+		t.Fatalf("unexpected metadata count: %d (want >= %d)", len(metadata), len(defaultTemplates))
 	}
 	for i := 1; i < len(metadata); i++ {
 		if metadata[i-1].TestType > metadata[i].TestType {
@@ -94,5 +118,38 @@ func TestTemplateRegistryRejectsUnknownType(t *testing.T) {
 	_, err := DefaultTemplateRegistry().GetTemplate("UNKNOWN_TEST")
 	if err == nil {
 		t.Fatal("expected unknown template error")
+	}
+}
+
+func TestCommunityTemplatesAutoRegistered(t *testing.T) {
+	registry := DefaultTemplateRegistry()
+	meta, err := registry.GetMetadata("COMMUNITY_EXPOSED_CONFIG_FILES")
+	if err != nil {
+		t.Fatalf("community template not auto-registered: %v", err)
+	}
+	if meta.Category != CategoryCommunity {
+		t.Fatalf("unexpected category: %s", meta.Category)
+	}
+	content, err := registry.GetTemplate("COMMUNITY_EXPOSED_CONFIG_FILES")
+	if err != nil {
+		t.Fatalf("get community template: %v", err)
+	}
+	if !strings.Contains(content, "exposed-config-files") {
+		t.Fatalf("unexpected community template content")
+	}
+}
+
+func TestCommunityTestTypeNormalization(t *testing.T) {
+	if got := communityTestType("cve-2021-1234.foo bar"); got != "COMMUNITY_CVE_2021_1234_FOO_BAR" {
+		t.Fatalf("unexpected normalized test type: %s", got)
+	}
+}
+
+func TestNewInjectionTemplatesRegistered(t *testing.T) {
+	registry := DefaultTemplateRegistry()
+	for _, tt := range []string{"REFLECTED_XSS", "SQL_INJECTION", "COMMAND_INJECTION", "SSRF", "SSRF_BLIND_OOB", "CORS_MISCONFIGURATION", "MASS_ASSIGNMENT", "DEFAULT_CREDENTIALS", "BOLA_CHAINED_ENUMERATION"} {
+		if _, err := registry.GetTemplate(tt); err != nil {
+			t.Fatalf("template %s not available: %v", tt, err)
+		}
 	}
 }

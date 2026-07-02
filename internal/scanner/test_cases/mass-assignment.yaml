@@ -1,0 +1,43 @@
+id: mass-assignment
+info:
+  name: Mass Assignment / Privilege Escalation via Extra Fields
+  author: karaxys
+  severity: high
+  description: The Scanner replays a write request with unexpected privileged fields (role, is_admin, verified) injected into the body and checks whether the server accepts them and reflects the elevated values back. Accepting client-supplied privileged fields indicates a mass-assignment / auto-binding flaw.
+  tags: api, mass-assignment, authorization, OWASP
+  reference:
+    - "https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/"
+    - "https://cwe.mitre.org/data/definitions/915.html"
+  classification:
+    cwe-id:
+      - CWE-915
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        {{header_block}}
+
+        {{polluted_body}}
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'status_code >= 200 && status_code < 300'
+          - 'contains(tolower(body), "kx_is_admin") || contains(tolower(body), "kx_role")'
+        condition: and
+
+      - type: status
+        name: secure
+        status:
+          - 400
+          - 401
+          - 403
+          - 422

@@ -1,0 +1,41 @@
+id: ssrf-direct
+info:
+  name: Server-Side Request Forgery (Direct Reflection)
+  author: karaxys
+  severity: high
+  description: The Scanner injects internal/cloud-metadata URLs into a request parameter and checks whether the server fetched them and reflected the response back (cloud metadata, internal service banners). Detects the in-band SSRF case where the fetched content is echoed to the client. Blind SSRF is covered separately by the OOB template.
+  tags: api, ssrf, OWASP
+  reference:
+    - "https://owasp.org/www-community/attacks/Server_Side_Request_Forgery"
+    - "https://cwe.mitre.org/data/definitions/918.html"
+  classification:
+    cwe-id:
+      - CWE-918
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        {{header_block}}
+
+        {{polluted_body}}
+
+    matchers-condition: or
+    matchers:
+      - type: word
+        name: vulnerable
+        part: body
+        case-insensitive: true
+        condition: or
+        words:
+          - "ami-id"
+          - "instance-identity"
+          - "iam/security-credentials"
+          - "computeMetadata"
+          - "\"accessKeyId\""
+          - "ec2 instance metadata"

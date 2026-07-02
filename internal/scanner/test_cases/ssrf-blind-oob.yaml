@@ -1,0 +1,31 @@
+id: ssrf-blind-oob
+info:
+  name: Blind Server-Side Request Forgery (Out-of-Band)
+  author: karaxys
+  severity: high
+  description: The Scanner injects a unique Interactsh callback URL into common SSRF-prone parameters and waits for an out-of-band DNS/HTTP interaction. A received callback proves the server fetched an attacker-controlled URL even when nothing is reflected in the response — the common blind-SSRF case. Requires OOB detection to be enabled (KARAXYS_SCAN_OOB_ENABLED or a configured Interactsh server).
+  tags: api, ssrf, oob, blind, OWASP
+  reference:
+    - "https://owasp.org/www-community/attacks/Server_Side_Request_Forgery"
+    - "https://cwe.mitre.org/data/definitions/918.html"
+  classification:
+    cwe-id:
+      - CWE-918
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}}?url=https://{{interactsh-url}}&uri=https://{{interactsh-url}}&target=https://{{interactsh-url}}&dest=https://{{interactsh-url}}&callback=https://{{interactsh-url}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        User-Agent: Karaxys-Scanner/1.0
+
+    matchers-condition: or
+    matchers:
+      - type: word
+        name: oob-interaction
+        part: interactsh_protocol
+        words:
+          - "http"
+          - "dns"
+        condition: or

@@ -761,18 +761,18 @@ func sanitizeIssueSortField(field string) string {
 	}
 }
 
-func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID) (*PaginatedResponse, error) {
-	return db.getScanResults(p, inventoryID, jobID, "")
+func (db *DB) GetScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, suiteID *primitive.ObjectID) (*PaginatedResponse, error) {
+	return db.getScanResults(p, inventoryID, jobID, suiteID, "")
 }
 
-func (db *DB) GetScanResultsForAccount(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, accountID primitive.ObjectID) (*PaginatedResponse, error) {
+func (db *DB) GetScanResultsForAccount(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, suiteID *primitive.ObjectID, accountID primitive.ObjectID) (*PaginatedResponse, error) {
 	if accountID.IsZero() {
-		return db.getScanResults(p, inventoryID, jobID, "")
+		return db.getScanResults(p, inventoryID, jobID, suiteID, "")
 	}
-	return db.getScanResults(p, inventoryID, jobID, accountID.Hex())
+	return db.getScanResults(p, inventoryID, jobID, suiteID, accountID.Hex())
 }
 
-func (db *DB) getScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, tenantID string) (*PaginatedResponse, error) {
+func (db *DB) getScanResults(p Pagination, inventoryID *primitive.ObjectID, jobID *primitive.ObjectID, suiteID *primitive.ObjectID, tenantID string) (*PaginatedResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -801,6 +801,9 @@ func (db *DB) getScanResults(p Pagination, inventoryID *primitive.ObjectID, jobI
 	}
 	if jobID != nil {
 		filter["job_id"] = *jobID
+	}
+	if suiteID != nil {
+		filter["suite_id"] = *suiteID
 	}
 
 	total, err := db.ScanResults.CountDocuments(ctx, filter)
@@ -923,6 +926,31 @@ func (db *DB) getScanJobs(p Pagination, tenantID string, status string, inventor
 		Limit:      p.Limit,
 		TotalPages: totalPages,
 	}, nil
+}
+
+// GetScanJobsBySuite returns every job belonging to a suite, oldest first, so a
+// caller can aggregate suite-level status and findings. Scoped by tenant when a
+// non-empty tenantID is supplied.
+func (db *DB) GetScanJobsBySuite(suiteID primitive.ObjectID, tenantID string) ([]core.ScanJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{"suite_id": suiteID}
+	if strings.TrimSpace(tenantID) != "" {
+		filter["tenant_id"] = strings.TrimSpace(tenantID)
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}})
+	cursor, err := db.ScanJobs.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var jobs []core.ScanJob
+	if err = cursor.All(ctx, &jobs); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 func (db *DB) UpdateIssueStatus(id primitive.ObjectID, tenantID string, status string) (*core.Issue, error) {

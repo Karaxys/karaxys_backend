@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"karaxys_backend/internal/core"
 	"karaxys_backend/internal/security/redact"
+	"net/url"
 	"strings"
 )
 
@@ -19,7 +20,22 @@ const (
 	testJWTInvalidSignature    = "JWT_INVALID_SIGNATURE"
 	testOpenRedirect           = "OPEN_REDIRECT"
 	testExposedMetrics         = "EXPOSED_METRICS"
+	testReflectedXSS           = "REFLECTED_XSS"
+	testSQLInjection           = "SQL_INJECTION"
+	testCommandInjection       = "COMMAND_INJECTION"
+	testSSRF                   = "SSRF"
+	testMassAssignment         = "MASS_ASSIGNMENT"
 )
+
+// injectionPayloads maps a body-injection test type to the value stitched into
+// each string field of the request body (mass assignment is handled separately
+// since it adds fields rather than replacing values).
+var injectionPayloads = map[string]string{
+	testReflectedXSS:     "kx7xss<svg/onload=alert(1)>",
+	testSQLInjection:     "kx'\"`)-- -",
+	testCommandInjection: "kx;id;$(id)`id`",
+	testSSRF:             "http://169.254.169.254/latest/meta-data/",
+}
 
 const (
 	AuthRoleAttacker = "attacker"
@@ -49,21 +65,105 @@ func BuildScanConfigWithAuthContexts(targetBaseURL string, inventory *core.ApiIn
 			return core.ScanConfig{}, err
 		}
 	}
+	if payload, ok := injectionPayloads[testType]; ok {
+		pollutedBody = buildInjectionBody(bodyToUse, payload)
+		targetPath = buildInjectionPath(targetPath, payload)
+	}
+	if testType == testMassAssignment {
+		pollutedBody = buildMassAssignmentBody(bodyToUse)
+	}
 	if testType == testOpenRedirect {
 		targetPath = applyOpenRedirect(targetPath)
 	}
 
 	return core.ScanConfig{
-		TargetURL:    targetBaseURL,
-		Method:       inventory.Method,
-		Path:         targetPath,
-		Body:         bodyToUse,
-		PollutedBody: pollutedBody,
-		Headers:      flatHeaders,
-		TestType:     testType,
-		ManualAuth:   tokenToUse,
-		AttackMethod: methodToUse,
+		TargetURL:            targetBaseURL,
+		Method:               inventory.Method,
+		Path:                 targetPath,
+		Body:                 bodyToUse,
+		PollutedBody:         pollutedBody,
+		Headers:              flatHeaders,
+		TestType:             testType,
+		ManualAuth:           tokenToUse,
+		AttackMethod:         methodToUse,
+		OriginalResponseBody: inventory.SampleRespBody,
+		OriginalStatusCode:   firstStatusCode(inventory.StatusCodes),
 	}, nil
+}
+
+func firstStatusCode(codes []int) int {
+	if len(codes) > 0 {
+		return codes[0]
+	}
+	return 0
+}
+
+// buildInjectionBody stitches an attack payload into every string field of the
+// sample JSON body (maximizing the chance of reaching a vulnerable sink). Falls
+// back to a single-field object when the sample body is empty or not JSON.
+func buildInjectionBody(sampleBody, payload string) string {
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(sampleBody)), &bodyMap); err != nil || len(bodyMap) == 0 {
+		return fmt.Sprintf(`{"kx_input":%s}`, jsonString(payload))
+	}
+	for key, val := range bodyMap {
+		if _, isString := val.(string); isString {
+			bodyMap[key] = payload
+		}
+	}
+	// Ensure at least one field carries the payload even if no string fields exist.
+	bodyMap["kx_input"] = payload
+	out, err := json.Marshal(bodyMap)
+	if err != nil {
+		return fmt.Sprintf(`{"kx_input":%s}`, jsonString(payload))
+	}
+	return string(out)
+}
+
+// buildInjectionPath stitches an attack payload into the query string so
+// injection tests reach GET / query-parameter sinks in addition to body sinks.
+// Every existing query value is replaced with the payload, and a fallback
+// parameter is added so endpoints with no query string are still exercised.
+func buildInjectionPath(originalPath, payload string) string {
+	base := originalPath
+	rawQuery := ""
+	if idx := strings.IndexByte(originalPath, '?'); idx >= 0 {
+		base = originalPath[:idx]
+		rawQuery = originalPath[idx+1:]
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		values = url.Values{}
+	}
+	for key := range values {
+		values.Set(key, payload)
+	}
+	values.Set("kx_input", payload)
+	return base + "?" + values.Encode()
+}
+
+// buildMassAssignmentBody adds unexpected privileged fields to the sample body;
+// the template matches on these exact markers reflected back in the response.
+func buildMassAssignmentBody(sampleBody string) string {
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(sampleBody)), &bodyMap); err != nil || bodyMap == nil {
+		bodyMap = map[string]interface{}{}
+	}
+	bodyMap["kx_is_admin"] = true
+	bodyMap["kx_role"] = "admin"
+	out, err := json.Marshal(bodyMap)
+	if err != nil {
+		return `{"kx_is_admin":true,"kx_role":"admin"}`
+	}
+	return string(out)
+}
+
+func jsonString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
 }
 
 func resolveAuthTokenFromContexts(testType string, inventory *core.ApiInventory, authContexts map[string]string, legacyManualToken string) (string, error) {

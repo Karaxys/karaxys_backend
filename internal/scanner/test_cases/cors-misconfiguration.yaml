@@ -1,0 +1,45 @@
+id: cors-misconfiguration
+info:
+  name: CORS Misconfiguration (Reflected Origin)
+  author: karaxys
+  severity: medium
+  description: The Scanner sends a request with an attacker-controlled Origin header and checks whether the server reflects that exact origin back in Access-Control-Allow-Origin. Reflecting an arbitrary origin — especially together with Access-Control-Allow-Credentials true — lets a malicious site read authenticated responses cross-origin.
+  tags: api, cors, misconfiguration, OWASP
+  reference:
+    - "https://portswigger.net/web-security/cors"
+    - "https://cwe.mitre.org/data/definitions/942.html"
+  classification:
+    cwe-id:
+      - CWE-942
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Origin: https://karaxys-cors-probe.example
+        Authorization: {{attack_token}}
+        User-Agent: Karaxys-Scanner/1.0
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'contains(tolower(header), "access-control-allow-origin: https://karaxys-cors-probe.example")'
+          - 'contains(tolower(header), "access-control-allow-credentials: true")'
+        condition: and
+
+      - type: dsl
+        name: vulnerable
+        dsl:
+          - 'contains(tolower(header), "access-control-allow-origin: *")'
+          - 'contains(tolower(header), "access-control-allow-credentials: true")'
+        condition: and
+
+      - type: word
+        name: secure
+        part: header
+        words:
+          - "Access-Control-Allow-Origin"
+        negative: true

@@ -458,6 +458,7 @@ type ScanResult struct {
 	TenantID       string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
 	ProjectID      string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	JobID          primitive.ObjectID `bson:"job_id,omitempty" json:"job_id,omitempty"`
+	SuiteID        primitive.ObjectID `bson:"suite_id,omitempty" json:"suite_id,omitempty"`
 	SchemaVersion  string             `bson:"schema_version" json:"schema_version"`
 	InventoryID    primitive.ObjectID `bson:"inventory_id"`
 	TestType       string             `bson:"test_type"`
@@ -501,6 +502,11 @@ type ScanConfig struct {
 	HostConcurrency     int               `bson:"host_concurrency,omitempty" json:"host_concurrency,omitempty"`
 	PayloadConcurrency  int               `bson:"payload_concurrency,omitempty" json:"payload_concurrency,omitempty"`
 	ProbeConcurrency    int               `bson:"probe_concurrency,omitempty" json:"probe_concurrency,omitempty"`
+	// Baseline captured response, used to suppress false positives where a test
+	// response is near-identical to the endpoint's normal response (generic error
+	// page, unchanged output). Populated from inventory at scan-config build time.
+	OriginalResponseBody string `bson:"original_response_body,omitempty" json:"original_response_body,omitempty"`
+	OriginalStatusCode   int    `bson:"original_status_code,omitempty" json:"original_status_code,omitempty"`
 }
 
 type ScanExecutionResult struct {
@@ -514,6 +520,13 @@ type ScanExecutionResult struct {
 	ResponseHeader string    `json:"response_headers,omitempty"`
 	Proof          string    `json:"proof"`
 	Timestamp      time.Time `json:"timestamp"`
+	// SimilarityScore is 0..1 vs. the baseline captured response (1 = identical).
+	// High values on a "vulnerable" result indicate a likely false positive
+	// (test response barely differs from the endpoint's normal response).
+	SimilarityScore float64 `json:"similarity_score,omitempty"`
+	// OutOfBand is true when the finding was confirmed by an Interactsh callback
+	// (blind SSRF / blind injection) rather than by in-band response matching.
+	OutOfBand bool `json:"out_of_band,omitempty"`
 }
 
 type ScanJob struct {
@@ -521,6 +534,7 @@ type ScanJob struct {
 	TenantID          string             `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
 	ProjectID         string             `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	InventoryID       primitive.ObjectID `bson:"inventory_id" json:"inventory_id"`
+	SuiteID           primitive.ObjectID `bson:"suite_id,omitempty" json:"suite_id,omitempty"`
 	RerunOfJobID      primitive.ObjectID `bson:"rerun_of_job_id,omitempty" json:"rerun_of_job_id,omitempty"`
 	Status            string             `bson:"status" json:"status"`
 	TestType          string             `bson:"test_type" json:"test_type"`

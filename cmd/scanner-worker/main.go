@@ -231,6 +231,7 @@ func processClaimedJob(database *db.DB, engine scanner.Executor, workerID string
 			TenantID:       job.TenantID,
 			ProjectID:      job.ProjectID,
 			JobID:          job.ID,
+			SuiteID:        job.SuiteID,
 			SchemaVersion:  res.SchemaVersion,
 			InventoryID:    job.InventoryID,
 			TestType:       res.TestType,

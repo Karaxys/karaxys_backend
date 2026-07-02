@@ -1,0 +1,37 @@
+id: command-injection
+info:
+  name: OS Command Injection
+  author: karaxys
+  severity: critical
+  description: The Scanner replays the request with a shell metacharacter payload injected into a request parameter and checks whether the response contains command output (e.g. the result of `id` or `/etc/passwd`). Reflected command output indicates unsanitized input reaching a shell.
+  tags: api, injection, rce, cmdi, OWASP
+  reference:
+    - "https://owasp.org/www-community/attacks/Command_Injection"
+    - "https://cwe.mitre.org/data/definitions/78.html"
+  classification:
+    cwe-id:
+      - CWE-78
+
+http:
+  - raw:
+      - |
+        {{method}} {{path}} HTTP/1.1
+        Host: {{Hostname}}
+        Authorization: {{attack_token}}
+        Content-Type: application/json
+        Content-Length: {{body_len}}
+        User-Agent: Karaxys-Scanner/1.0
+        {{header_block}}
+
+        {{polluted_body}}
+
+    matchers-condition: or
+    matchers:
+      - type: regex
+        name: vulnerable
+        part: body
+        condition: or
+        regex:
+          - "uid=[0-9]+\\([a-z0-9_-]+\\) gid=[0-9]+\\("
+          - "root:.*:0:0:"
+          - "\\[boot loader\\]"

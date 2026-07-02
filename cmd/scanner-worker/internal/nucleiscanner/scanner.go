@@ -53,17 +53,21 @@ func (s *Scanner) ExecuteScanContext(ctx context.Context, config core.ScanConfig
 		nuclei.DisableUpdateCheck(),
 		nuclei.EnableMatcherStatus(),
 	}
+	if opts, ok := interactshOptions(); ok {
+		engineOptions = append(engineOptions, nuclei.WithInteractshOptions(opts))
+	}
 	if config.RateLimitPerSecond > 0 {
 		engineOptions = append(engineOptions, nuclei.WithGlobalRateLimitCtx(ctx, config.RateLimitPerSecond, time.Second))
 	}
 	if hasConcurrencyLimits(config) {
 		engineOptions = append(engineOptions, nuclei.WithConcurrency(nuclei.Concurrency{
-			TemplateConcurrency:         positiveOrDefault(config.TemplateConcurrency, 1),
-			HostConcurrency:             positiveOrDefault(config.HostConcurrency, 1),
-			HeadlessHostConcurrency:     positiveOrDefault(config.HostConcurrency, 1),
-			HeadlessTemplateConcurrency: positiveOrDefault(config.TemplateConcurrency, 1),
-			TemplatePayloadConcurrency:  positiveOrDefault(config.PayloadConcurrency, 1),
-			ProbeConcurrency:            positiveOrDefault(config.ProbeConcurrency, 1),
+			TemplateConcurrency:           positiveOrDefault(config.TemplateConcurrency, 1),
+			HostConcurrency:               positiveOrDefault(config.HostConcurrency, 1),
+			HeadlessHostConcurrency:       positiveOrDefault(config.HostConcurrency, 1),
+			HeadlessTemplateConcurrency:   positiveOrDefault(config.TemplateConcurrency, 1),
+			JavascriptTemplateConcurrency: positiveOrDefault(config.TemplateConcurrency, 1),
+			TemplatePayloadConcurrency:    positiveOrDefault(config.PayloadConcurrency, 1),
+			ProbeConcurrency:              positiveOrDefault(config.ProbeConcurrency, 1),
 		}))
 	}
 	ne, err := nuclei.NewThreadSafeNucleiEngineCtx(ctx, engineOptions...)
@@ -72,12 +76,17 @@ func (s *Scanner) ExecuteScanContext(ctx context.Context, config core.ScanConfig
 	}
 	defer ne.Close()
 
+	severityRule := severityRuleFor(s.registry, config.TestType)
+
 	var results []core.ScanExecutionResult
 	var mu sync.Mutex
 	ne.GlobalResultCallback(func(event *output.ResultEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		results = append(results, buildResult(config, event))
+		result, keep := buildResult(config, event, severityRule)
+		if keep {
+			results = append(results, result)
+		}
 	})
 
 	vars := scanner.BuildTemplateVars(config)
@@ -94,29 +103,53 @@ func (s *Scanner) ExecuteScanContext(ctx context.Context, config core.ScanConfig
 	return results, nil
 }
 
-func buildResult(config core.ScanConfig, event *output.ResultEvent) core.ScanExecutionResult {
-	matcherName := strings.ToLower(event.MatcherName)
-	isVulnerable := matcherName == "vulnerable" ||
-		matcherName == "critical-data-leak" ||
-		matcherName == "high-sensitive-exposure" ||
-		matcherName == "low-method-allowed"
+// negativeMatcherNames are sentinel matcher names our hand-authored templates
+// use to report a NON-finding (endpoint behaved securely / errored). Any other
+// matched matcher — including unnamed matchers in community templates — counts
+// as a finding.
+var negativeMatcherNames = map[string]bool{
+	"secure": true,
+	"error":  true,
+}
+
+// buildResult converts a Nuclei result event into a scan result. The second
+// return value reports whether the result should be kept: non-finding sentinel
+// events (used only for observability under EnableMatcherStatus) are dropped.
+func buildResult(config core.ScanConfig, event *output.ResultEvent, rule *severityRule) (core.ScanExecutionResult, bool) {
+	matcherName := strings.ToLower(strings.TrimSpace(event.MatcherName))
+	oob := event.Interaction != nil
+	matched := event.MatcherStatus || oob
+	if !matched || negativeMatcherNames[matcherName] {
+		return core.ScanExecutionResult{}, false
+	}
+
 	severity := event.Info.SeverityHolder.Severity.String()
+	similarity := bodySimilarity(config.OriginalResponseBody, event.Response)
+	severity = rule.apply(severity, event.Response, similarity, oob)
+
 	actualMethod := config.Method
 	if config.AttackMethod != "" {
 		actualMethod = config.AttackMethod
 	}
 
-	return core.ScanExecutionResult{
-		SchemaVersion:  contracts.SchemaScanResultV1,
-		TestType:       config.TestType,
-		Vulnerable:     isVulnerable,
-		Severity:       severity,
-		Description:    fmt.Sprintf("Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName),
-		ResponseStatus: statusCode(event),
-		ResponseBody:   event.Response,
-		Proof:          fmt.Sprintf("curl -v -X %s %s%s -H 'Authorization: %s'", actualMethod, config.TargetURL, config.Path, config.ManualAuth),
-		Timestamp:      time.Now().UTC(),
+	description := fmt.Sprintf("Scan Result: %s (Matcher: %s)", event.Matched, event.MatcherName)
+	if oob {
+		description = fmt.Sprintf("Out-of-band interaction confirmed: %s", event.Matched)
 	}
+
+	return core.ScanExecutionResult{
+		SchemaVersion:   contracts.SchemaScanResultV1,
+		TestType:        config.TestType,
+		Vulnerable:      true,
+		Severity:        severity,
+		Description:     description,
+		ResponseStatus:  statusCode(event),
+		ResponseBody:    event.Response,
+		Proof:           fmt.Sprintf("curl -v -X %s %s%s -H 'Authorization: %s'", actualMethod, config.TargetURL, config.Path, config.ManualAuth),
+		SimilarityScore: similarity,
+		OutOfBand:       oob,
+		Timestamp:       time.Now().UTC(),
+	}, true
 }
 
 func statusCode(event *output.ResultEvent) int {
